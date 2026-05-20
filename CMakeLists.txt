@@ -11,16 +11,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Default to Release if user didn't specify
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "RelWithDebInfo" "MinSizeRel")
 endif()
 
-# Export compile_commands.json for clangd / IntelliSense
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-# Put the binary at build/vigil
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
 message(STATUS "Vigil ${PROJECT_VERSION} — ${CMAKE_BUILD_TYPE} build")
@@ -35,12 +31,8 @@ set(FETCHCONTENT_QUIET FALSE)
 # --- Vulkan SDK ---
 find_package(Vulkan REQUIRED)
 message(STATUS "Vulkan SDK version: ${Vulkan_VERSION}")
-message(STATUS "Vulkan include dir: ${Vulkan_INCLUDE_DIRS}")
-message(STATUS "Vulkan library:     ${Vulkan_LIBRARIES}")
 
 # --- SDL3 ---
-# Bump GIT_TAG to the latest release tag from
-#   https://github.com/libsdl-org/SDL/releases  (use a release-3.x.y tag)
 FetchContent_Declare(SDL3
     GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
     GIT_TAG        release-3.2.0
@@ -62,16 +54,27 @@ FetchContent_Declare(glm
 )
 FetchContent_MakeAvailable(glm)
 
+# --- vk-bootstrap ---
+FetchContent_Declare(vk-bootstrap
+    GIT_REPOSITORY https://github.com/charles-lunarg/vk-bootstrap.git
+    GIT_TAG        v1.4.307
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(vk-bootstrap)
+
 # === Executable ===
 
 add_executable(vigil
     src/main.cpp
+    src/core/Window.cpp
+    src/core/VulkanContext.cpp
 )
 
 target_link_libraries(vigil PRIVATE
     Vulkan::Vulkan
     SDL3::SDL3-static
     glm::glm
+    vk-bootstrap::vk-bootstrap
 )
 
 target_include_directories(vigil PRIVATE
@@ -85,7 +88,6 @@ if(APPLE)
     )
 endif()
 
-# Warnings baseline
 if(MSVC)
     target_compile_options(vigil PRIVATE /W4 /permissive-)
 else()
