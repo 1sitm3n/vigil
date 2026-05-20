@@ -1,0 +1,53 @@
+# Build
+build/
+out/
+cmake-build-*/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE — track only the configs we ship
+.vscode/*
+!.vscode/c_cpp_properties.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Compiled artifacts
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# FetchContent populates this
+_deps/
+
+# Large binary assets — generated locally, not committed
+assets/characters/*/*.glb
+assets/characters/*/anims/*.glb
+assets/environment/*.glb
+assets/vfx/**
+assets/hdri/*.hdr
+assets/hdri/*.exr
+assets/audio/**
+!assets/.gitkeep
+!assets/**/.gitkeep
+
+# Generated SPIR-V
+shaders/spv/
+
+# Save data
+save.dat
+
+# Devlog scratch
+devlog.draft.md
+
+# Tripo working folder (kept outside the repo by convention)
+vigil-assets-raw/

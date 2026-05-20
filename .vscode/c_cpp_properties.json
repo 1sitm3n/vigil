@@ -1,0 +1,19 @@
+{
+    "configurations": [
+        {
+            "name": "macOS",
+            "compilerPath": "/usr/bin/clang++",
+            "cStandard": "c17",
+            "cppStandard": "c++20",
+            "intelliSenseMode": "macos-clang-arm64",
+            "compileCommands": "${workspaceFolder}/build/compile_commands.json",
+            "macFrameworkPath": ["/System/Library/Frameworks"],
+            "includePath": [
+                "${workspaceFolder}/src",
+                "${workspaceFolder}/third_party",
+                "${env:VULKAN_SDK}/include"
+            ]
+        }
+    ],
+    "version": 4
+}
