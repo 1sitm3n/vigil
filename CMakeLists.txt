@@ -29,8 +29,9 @@ include(FetchContent)
 set(FETCHCONTENT_QUIET FALSE)
 
 # --- Vulkan SDK ---
-find_package(Vulkan REQUIRED)
+find_package(Vulkan REQUIRED COMPONENTS glslangValidator)
 message(STATUS "Vulkan SDK version: ${Vulkan_VERSION}")
+message(STATUS "glslangValidator:   ${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE}")
 
 # --- SDL3 ---
 FetchContent_Declare(SDL3
@@ -62,13 +63,43 @@ FetchContent_Declare(vk-bootstrap
 )
 FetchContent_MakeAvailable(vk-bootstrap)
 
+# === Shader compilation ===
+file(GLOB SHADER_SOURCES
+    "${CMAKE_SOURCE_DIR}/shaders/*.vert"
+    "${CMAKE_SOURCE_DIR}/shaders/*.frag"
+    "${CMAKE_SOURCE_DIR}/shaders/*.comp"
+)
+set(SHADER_BINARY_DIR "${CMAKE_BINARY_DIR}/shaders")
+file(MAKE_DIRECTORY ${SHADER_BINARY_DIR})
+
+set(SPIRV_BINARY_FILES "")
+foreach(SHADER ${SHADER_SOURCES})
+    get_filename_component(SHADER_NAME ${SHADER} NAME)
+    set(SPIRV "${SHADER_BINARY_DIR}/${SHADER_NAME}.spv")
+    add_custom_command(
+        OUTPUT ${SPIRV}
+        COMMAND ${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE} -V ${SHADER} -o ${SPIRV}
+        DEPENDS ${SHADER}
+        COMMENT "Compiling ${SHADER_NAME} -> ${SHADER_NAME}.spv"
+        VERBATIM
+    )
+    list(APPEND SPIRV_BINARY_FILES ${SPIRV})
+endforeach()
+
+add_custom_target(shaders DEPENDS ${SPIRV_BINARY_FILES})
+
 # === Executable ===
 
 add_executable(vigil
     src/main.cpp
     src/core/Window.cpp
     src/core/VulkanContext.cpp
+    src/render/Swapchain.cpp
+    src/render/GraphicsPipeline.cpp
+    src/render/Renderer.cpp
 )
+
+add_dependencies(vigil shaders)
 
 target_link_libraries(vigil PRIVATE
     Vulkan::Vulkan
