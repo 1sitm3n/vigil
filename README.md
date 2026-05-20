@@ -1,3 +1,4 @@
+<img width="1427" height="706" alt="Screenshot 2026-05-20 at 23 32 02" src="https://github.com/user-attachments/assets/1d15b1a7-fcb0-4137-980c-f971896a7d70" />
 # Vigil
 
 > A lone knight holds an ancient ruin against the rising dark.
