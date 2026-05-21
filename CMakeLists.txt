@@ -6,7 +6,6 @@ project(vigil
     LANGUAGES CXX
 )
 
-# === C++ standard ===
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -23,17 +22,13 @@ message(STATUS "Vigil ${PROJECT_VERSION} — ${CMAKE_BUILD_TYPE} build")
 message(STATUS "Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "System:   ${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_PROCESSOR}")
 
-# === Dependencies ===
-
 include(FetchContent)
 set(FETCHCONTENT_QUIET FALSE)
 
-# --- Vulkan SDK ---
 find_package(Vulkan REQUIRED COMPONENTS glslangValidator)
 message(STATUS "Vulkan SDK version: ${Vulkan_VERSION}")
 message(STATUS "glslangValidator:   ${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE}")
 
-# --- SDL3 ---
 FetchContent_Declare(SDL3
     GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
     GIT_TAG        release-3.2.0
@@ -47,7 +42,6 @@ set(SDL_EXAMPLES      OFF CACHE BOOL "" FORCE)
 set(SDL_INSTALL_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(SDL3)
 
-# --- glm ---
 FetchContent_Declare(glm
     GIT_REPOSITORY https://github.com/g-truc/glm.git
     GIT_TAG        1.0.1
@@ -55,7 +49,6 @@ FetchContent_Declare(glm
 )
 FetchContent_MakeAvailable(glm)
 
-# --- vk-bootstrap ---
 FetchContent_Declare(vk-bootstrap
     GIT_REPOSITORY https://github.com/charles-lunarg/vk-bootstrap.git
     GIT_TAG        v1.4.307
@@ -63,7 +56,6 @@ FetchContent_Declare(vk-bootstrap
 )
 FetchContent_MakeAvailable(vk-bootstrap)
 
-# === Shader compilation ===
 file(GLOB SHADER_SOURCES
     "${CMAKE_SOURCE_DIR}/shaders/*.vert"
     "${CMAKE_SOURCE_DIR}/shaders/*.frag"
@@ -88,8 +80,6 @@ endforeach()
 
 add_custom_target(shaders DEPENDS ${SPIRV_BINARY_FILES})
 
-# === Executable ===
-
 add_executable(vigil
     src/main.cpp
     src/core/Window.cpp
@@ -97,6 +87,11 @@ add_executable(vigil
     src/render/Swapchain.cpp
     src/render/GraphicsPipeline.cpp
     src/render/Renderer.cpp
+    src/render/Buffer.cpp
+    src/render/Texture.cpp
+    src/render/Mesh.cpp
+    third_party/stb/stb_image_impl.cpp
+    third_party/cgltf/cgltf_impl.cpp
 )
 
 add_dependencies(vigil shaders)
@@ -111,6 +106,8 @@ target_link_libraries(vigil PRIVATE
 target_include_directories(vigil PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/third_party
+    ${CMAKE_SOURCE_DIR}/third_party/stb
+    ${CMAKE_SOURCE_DIR}/third_party/cgltf
 )
 
 if(APPLE)
@@ -136,25 +133,3 @@ endif()
 if(CMAKE_BUILD_TYPE STREQUAL "Release" AND NOT MSVC)
     target_compile_options(vigil PRIVATE -O3)
 endif()
-
-# Day 4 prep: vendored single-header libraries
-target_include_directories(vigil PRIVATE
-  ${CMAKE_SOURCE_DIR}/third_party/stb
-  ${CMAKE_SOURCE_DIR}/third_party/cgltf
-)
-
-target_sources(vigil PRIVATE
-  third_party/stb/stb_image_impl.cpp
-  third_party/cgltf/cgltf_impl.cpp
-)
-
-# Day 4 prep: vendored single-header libraries
-target_include_directories(vigil PRIVATE
-  ${CMAKE_SOURCE_DIR}/third_party/stb
-  ${CMAKE_SOURCE_DIR}/third_party/cgltf
-)
-
-target_sources(vigil PRIVATE
-  third_party/stb/stb_image_impl.cpp
-  third_party/cgltf/cgltf_impl.cpp
-)

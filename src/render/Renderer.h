@@ -1,8 +1,13 @@
 #pragma once
 
+#include "render/Buffer.h"
+#include "render/Mesh.h"
+#include "render/Texture.h"
+
 #include <vulkan/vulkan.h>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <vector>
 
@@ -39,16 +44,28 @@ private:
     void create_command_pool();
     void create_command_buffers();
     void create_sync_objects();
+    void create_mesh();
+    void create_texture();
+    void create_descriptor_pool();
+    void create_descriptor_sets();
     void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index);
 
     VulkanContext&          vk_;
     const Swapchain&        swapchain_;
     const GraphicsPipeline& pipeline_;
 
-    VkCommandPool                          command_pool_ = VK_NULL_HANDLE;
+    VkCommandPool                           command_pool_ = VK_NULL_HANDLE;
     std::array<FrameData, FRAMES_IN_FLIGHT> frames_{};
-    std::vector<VkSemaphore>               render_finished_;  // one per swapchain image
-    uint32_t                               current_frame_ = 0;
+    std::vector<VkSemaphore>                render_finished_;
+    uint32_t                                current_frame_ = 0;
+
+    Mesh                                    mesh_;
+
+    Texture                                       diffuse_texture_;
+    VkDescriptorPool                              descriptor_pool_ = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, FRAMES_IN_FLIGHT> descriptor_sets_{};
+
+    std::chrono::high_resolution_clock::time_point start_time_;
 };
 
 }  // namespace vigil

@@ -22,15 +22,18 @@ public:
     GraphicsPipeline(GraphicsPipeline&&) = delete;
     GraphicsPipeline& operator=(GraphicsPipeline&&) = delete;
 
-    VkPipeline       handle() const { return pipeline_; }
-    VkPipelineLayout layout() const { return layout_; }
+    VkPipeline            handle()                const { return pipeline_; }
+    VkPipelineLayout      layout()                const { return layout_; }
+    VkDescriptorSetLayout descriptor_set_layout() const { return descriptor_set_layout_; }
 
 private:
     VkShaderModule load_shader_module(const std::string& path);
+    void create_descriptor_set_layout();
 
-    VulkanContext&   vk_;
-    VkPipelineLayout layout_   = VK_NULL_HANDLE;
-    VkPipeline       pipeline_ = VK_NULL_HANDLE;
+    VulkanContext&        vk_;
+    VkDescriptorSetLayout descriptor_set_layout_ = VK_NULL_HANDLE;
+    VkPipelineLayout      layout_                = VK_NULL_HANDLE;
+    VkPipeline            pipeline_              = VK_NULL_HANDLE;
 };
 
 }  // namespace vigil

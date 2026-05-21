@@ -1,8 +1,14 @@
 #include "render/Renderer.h"
 #include "render/Swapchain.h"
 #include "render/GraphicsPipeline.h"
+#include "render/Vertex.h"
 #include "core/VulkanContext.h"
 
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
+#include <array>
 #include <cstdint>
 #include <stdexcept>
 
@@ -12,9 +18,14 @@ Renderer::Renderer(VulkanContext& vk,
                    const Swapchain& swapchain,
                    const GraphicsPipeline& pipeline)
     : vk_(vk), swapchain_(swapchain), pipeline_(pipeline) {
+    start_time_ = std::chrono::high_resolution_clock::now();
     create_command_pool();
     create_command_buffers();
     create_sync_objects();
+    create_mesh();
+    create_texture();
+    create_descriptor_pool();
+    create_descriptor_sets();
 }
 
 Renderer::~Renderer() {
@@ -27,7 +38,8 @@ Renderer::~Renderer() {
     for (auto sem : render_finished_) {
         if (sem) vkDestroySemaphore(vk_.device(), sem, nullptr);
     }
-    if (command_pool_) vkDestroyCommandPool(vk_.device(), command_pool_, nullptr);
+    if (descriptor_pool_) vkDestroyDescriptorPool(vk_.device(), descriptor_pool_, nullptr);
+    if (command_pool_)    vkDestroyCommandPool(vk_.device(), command_pool_, nullptr);
 }
 
 void Renderer::wait_idle() {
@@ -65,7 +77,7 @@ void Renderer::create_sync_objects() {
 
     VkFenceCreateInfo fence_info{};
     fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;  // first frame doesn't wait
+    fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
     for (auto& frame : frames_) {
         if (vkCreateSemaphore(vk_.device(), &sem_info, nullptr, &frame.image_available) != VK_SUCCESS ||
@@ -82,6 +94,63 @@ void Renderer::create_sync_objects() {
     }
 }
 
+void Renderer::create_mesh() {
+    mesh_ = Mesh(vk_, "assets/test/concrete_cat_statue_1k.gltf");
+}
+
+void Renderer::create_texture() {
+    diffuse_texture_ = Texture(vk_, command_pool_, "assets/test/checker.png");
+}
+
+void Renderer::create_descriptor_pool() {
+    VkDescriptorPoolSize pool_size{};
+    pool_size.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    pool_size.descriptorCount = FRAMES_IN_FLIGHT;
+
+    VkDescriptorPoolCreateInfo info{};
+    info.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    info.poolSizeCount = 1;
+    info.pPoolSizes    = &pool_size;
+    info.maxSets       = FRAMES_IN_FLIGHT;
+
+    if (vkCreateDescriptorPool(vk_.device(), &info, nullptr, &descriptor_pool_) != VK_SUCCESS) {
+        throw std::runtime_error("vkCreateDescriptorPool failed");
+    }
+}
+
+void Renderer::create_descriptor_sets() {
+    std::array<VkDescriptorSetLayout, FRAMES_IN_FLIGHT> layouts;
+    layouts.fill(pipeline_.descriptor_set_layout());
+
+    VkDescriptorSetAllocateInfo ai{};
+    ai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool     = descriptor_pool_;
+    ai.descriptorSetCount = FRAMES_IN_FLIGHT;
+    ai.pSetLayouts        = layouts.data();
+
+    if (vkAllocateDescriptorSets(vk_.device(), &ai, descriptor_sets_.data()) != VK_SUCCESS) {
+        throw std::runtime_error("vkAllocateDescriptorSets failed");
+    }
+
+    for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; ++i) {
+        VkDescriptorImageInfo image_info{};
+        image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        image_info.imageView   = diffuse_texture_.view();
+        image_info.sampler     = diffuse_texture_.sampler();
+
+        VkWriteDescriptorSet write{};
+        write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet          = descriptor_sets_[i];
+        write.dstBinding      = 0;
+        write.dstArrayElement = 0;
+        write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.descriptorCount = 1;
+        write.pImageInfo      = &image_info;
+
+        vkUpdateDescriptorSets(vk_.device(), 1, &write, 0, nullptr);
+    }
+}
+
 void Renderer::draw_frame() {
     auto& frame = frames_[current_frame_];
 
@@ -93,7 +162,6 @@ void Renderer::draw_frame() {
         frame.image_available, VK_NULL_HANDLE, &image_index);
 
     if (acquire == VK_ERROR_OUT_OF_DATE_KHR) {
-        // Swapchain stale (resize). Skip this frame — recreation comes Day 4+.
         return;
     } else if (acquire != VK_SUCCESS && acquire != VK_SUBOPTIMAL_KHR) {
         throw std::runtime_error("vkAcquireNextImageKHR failed");
@@ -130,7 +198,7 @@ void Renderer::draw_frame() {
 
     VkResult present_result = vkQueuePresentKHR(vk_.present_queue(), &present);
     if (present_result == VK_ERROR_OUT_OF_DATE_KHR || present_result == VK_SUBOPTIMAL_KHR) {
-        // Resize. Day 4+ handles recreation.
+        // Resize handled later.
     } else if (present_result != VK_SUCCESS) {
         throw std::runtime_error("vkQueuePresentKHR failed");
     }
@@ -145,9 +213,9 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd, uint32_t image_index) 
         throw std::runtime_error("vkBeginCommandBuffer failed");
     }
 
-    // VOID_BG clear colour — Vigil's deepest black-violet
-    VkClearValue clear{};
-    clear.color = { { 0.031f, 0.027f, 0.039f, 1.0f } };
+    std::array<VkClearValue, 2> clears{};
+    clears[0].color        = { { 0.031f, 0.027f, 0.039f, 1.0f } };
+    clears[1].depthStencil = { 1.0f, 0 };
 
     const VkExtent2D ext = swapchain_.extent();
 
@@ -157,12 +225,15 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd, uint32_t image_index) 
     rp.framebuffer       = swapchain_.framebuffer(image_index);
     rp.renderArea.offset = {0, 0};
     rp.renderArea.extent = ext;
-    rp.clearValueCount   = 1;
-    rp.pClearValues      = &clear;
+    rp.clearValueCount   = static_cast<uint32_t>(clears.size());
+    rp.pClearValues      = clears.data();
 
     vkCmdBeginRenderPass(cmd, &rp, VK_SUBPASS_CONTENTS_INLINE);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
+
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.layout(),
+                            0, 1, &descriptor_sets_[current_frame_], 0, nullptr);
 
     VkViewport viewport{};
     viewport.x        = 0.0f;
@@ -178,7 +249,33 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd, uint32_t image_index) 
     scissor.extent = ext;
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    vkCmdDraw(cmd, 3, 1, 0, 0);
+    const auto now = std::chrono::high_resolution_clock::now();
+    const float t = std::chrono::duration<float>(now - start_time_).count();
+
+    glm::mat4 model = glm::rotate(glm::mat4(1.0f), t * 0.6f, glm::vec3(0.0f, 1.0f, 0.0f))
+                    * glm::rotate(glm::mat4(1.0f), t * 0.4f, glm::vec3(1.0f, 0.0f, 0.0f));
+
+    glm::mat4 view = glm::lookAt(
+        glm::vec3(0.6f, 0.5f, 0.9f),
+        glm::vec3(0.0f, 0.15f, 0.0f),
+        glm::vec3(0.0f, 1.0f, 0.0f)
+    );
+
+    const float aspect = static_cast<float>(ext.width) / static_cast<float>(ext.height);
+    glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 100.0f);
+    proj[1][1] *= -1.0f;
+
+    glm::mat4 mvp = proj * view * model;
+    vkCmdPushConstants(cmd, pipeline_.layout(),
+                       VK_SHADER_STAGE_VERTEX_BIT,
+                       0, sizeof(mvp), &mvp);
+
+    VkBuffer     vbufs[]   = { mesh_.vertex_buffer_handle() };
+    VkDeviceSize offsets[] = { 0 };
+    vkCmdBindVertexBuffers(cmd, 0, 1, vbufs, offsets);
+    vkCmdBindIndexBuffer(cmd, mesh_.index_buffer_handle(), 0, VK_INDEX_TYPE_UINT32);
+
+    vkCmdDrawIndexed(cmd, mesh_.index_count(), 1, 0, 0, 0);
 
     vkCmdEndRenderPass(cmd);
 
