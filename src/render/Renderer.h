@@ -16,6 +16,7 @@ namespace vigil {
 class VulkanContext;
 class Swapchain;
 class GraphicsPipeline;
+class Camera;
 
 class Renderer {
 public:
@@ -31,7 +32,7 @@ public:
     Renderer(Renderer&&) = delete;
     Renderer& operator=(Renderer&&) = delete;
 
-    void draw_frame();
+    void draw_frame(const Camera& camera);
     void wait_idle();
 
 private:
@@ -48,7 +49,8 @@ private:
     void create_texture();
     void create_descriptor_pool();
     void create_descriptor_sets();
-    void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index);
+    void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
+                               const Camera& camera);
 
     VulkanContext&          vk_;
     const Swapchain&        swapchain_;

@@ -3,6 +3,7 @@
 #include "render/GraphicsPipeline.h"
 #include "render/Vertex.h"
 #include "core/VulkanContext.h"
+#include "core/Camera.h"
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
@@ -151,7 +152,7 @@ void Renderer::create_descriptor_sets() {
     }
 }
 
-void Renderer::draw_frame() {
+void Renderer::draw_frame(const Camera& camera) {
     auto& frame = frames_[current_frame_];
 
     vkWaitForFences(vk_.device(), 1, &frame.in_flight, VK_TRUE, UINT64_MAX);
@@ -169,7 +170,7 @@ void Renderer::draw_frame() {
 
     vkResetFences(vk_.device(), 1, &frame.in_flight);
     vkResetCommandBuffer(frame.command_buffer, 0);
-    record_command_buffer(frame.command_buffer, image_index);
+    record_command_buffer(frame.command_buffer, image_index, camera);
 
     const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 
@@ -206,7 +207,8 @@ void Renderer::draw_frame() {
     current_frame_ = (current_frame_ + 1) % FRAMES_IN_FLIGHT;
 }
 
-void Renderer::record_command_buffer(VkCommandBuffer cmd, uint32_t image_index) {
+void Renderer::record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
+                                     const Camera& camera) {
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     if (vkBeginCommandBuffer(cmd, &begin) != VK_SUCCESS) {
@@ -252,20 +254,11 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd, uint32_t image_index) 
     const auto now = std::chrono::high_resolution_clock::now();
     const float t = std::chrono::duration<float>(now - start_time_).count();
 
-    glm::mat4 model = glm::rotate(glm::mat4(1.0f), t * 0.6f, glm::vec3(0.0f, 1.0f, 0.0f))
-                    * glm::rotate(glm::mat4(1.0f), t * 0.4f, glm::vec3(1.0f, 0.0f, 0.0f));
-
-    glm::mat4 view = glm::lookAt(
-        glm::vec3(0.6f, 0.5f, 0.9f),
-        glm::vec3(0.0f, 0.15f, 0.0f),
-        glm::vec3(0.0f, 1.0f, 0.0f)
-    );
+    glm::mat4 model = glm::rotate(glm::mat4(1.0f), t * 0.3f, glm::vec3(0.0f, 1.0f, 0.0f));
 
     const float aspect = static_cast<float>(ext.width) / static_cast<float>(ext.height);
-    glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 100.0f);
-    proj[1][1] *= -1.0f;
+    glm::mat4 mvp = camera.projection(aspect) * camera.view() * model;
 
-    glm::mat4 mvp = proj * view * model;
     vkCmdPushConstants(cmd, pipeline_.layout(),
                        VK_SHADER_STAGE_VERTEX_BIT,
                        0, sizeof(mvp), &mvp);

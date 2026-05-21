@@ -8,6 +8,17 @@
 
 namespace vigil {
 
+struct InputFrame {
+    float mouse_dx = 0.0f;   // accumulated relative motion while RMB held
+    float mouse_dy = 0.0f;
+    float scroll_y = 0.0f;   // accumulated wheel ticks
+    bool  rmb_held = false;
+    bool  w_held   = false;
+    bool  a_held   = false;
+    bool  s_held   = false;
+    bool  d_held   = false;
+};
+
 class Window {
 public:
     Window(int width, int height, const std::string& title);
@@ -18,8 +29,9 @@ public:
     Window(Window&&) = delete;
     Window& operator=(Window&&) = delete;
 
-    void poll_events();
-    bool should_close() const { return should_close_; }
+    void       poll_events();
+    InputFrame consume_input();
+    bool       should_close() const { return should_close_; }
 
     int width()  const { return width_; }
     int height() const { return height_; }
@@ -35,6 +47,11 @@ private:
     int  width_         = 0;
     int  height_        = 0;
     bool should_close_  = false;
+
+    float pending_mouse_dx_ = 0.0f;
+    float pending_mouse_dy_ = 0.0f;
+    float pending_scroll_y_ = 0.0f;
+    bool  rmb_down_         = false;
 };
 
 }  // namespace vigil

@@ -35,17 +35,65 @@ void Window::poll_events() {
             case SDL_EVENT_QUIT:
                 should_close_ = true;
                 break;
+
             case SDL_EVENT_KEY_DOWN:
                 if (event.key.key == SDLK_ESCAPE) should_close_ = true;
                 break;
+
             case SDL_EVENT_WINDOW_RESIZED:
                 width_  = event.window.data1;
                 height_ = event.window.data2;
                 break;
+
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                if (event.button.button == SDL_BUTTON_RIGHT) {
+                    rmb_down_ = true;
+                    SDL_SetWindowRelativeMouseMode(window_, true);
+                }
+                break;
+
+            case SDL_EVENT_MOUSE_BUTTON_UP:
+                if (event.button.button == SDL_BUTTON_RIGHT) {
+                    rmb_down_ = false;
+                    SDL_SetWindowRelativeMouseMode(window_, false);
+                }
+                break;
+
+            case SDL_EVENT_MOUSE_MOTION:
+                if (rmb_down_) {
+                    pending_mouse_dx_ += event.motion.xrel;
+                    pending_mouse_dy_ += event.motion.yrel;
+                }
+                break;
+
+            case SDL_EVENT_MOUSE_WHEEL:
+                pending_scroll_y_ += event.wheel.y;
+                break;
+
             default:
                 break;
         }
     }
+}
+
+InputFrame Window::consume_input() {
+    InputFrame frame;
+    frame.mouse_dx = pending_mouse_dx_;
+    frame.mouse_dy = pending_mouse_dy_;
+    frame.scroll_y = pending_scroll_y_;
+    frame.rmb_held = rmb_down_;
+
+    pending_mouse_dx_ = 0.0f;
+    pending_mouse_dy_ = 0.0f;
+    pending_scroll_y_ = 0.0f;
+
+    const bool* keys = SDL_GetKeyboardState(nullptr);
+    frame.w_held = keys[SDL_SCANCODE_W];
+    frame.a_held = keys[SDL_SCANCODE_A];
+    frame.s_held = keys[SDL_SCANCODE_S];
+    frame.d_held = keys[SDL_SCANCODE_D];
+
+    return frame;
 }
 
 std::vector<const char*> Window::required_vulkan_extensions() const {

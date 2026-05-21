@@ -83,6 +83,8 @@ add_custom_target(shaders DEPENDS ${SPIRV_BINARY_FILES})
 add_executable(vigil
     src/main.cpp
     src/core/Window.cpp
+    src/core/Camera.cpp
+    src/core/Camera.cpp
     src/core/VulkanContext.cpp
     src/render/Swapchain.cpp
     src/render/GraphicsPipeline.cpp
