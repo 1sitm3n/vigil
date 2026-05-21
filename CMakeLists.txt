@@ -136,3 +136,14 @@ endif()
 if(CMAKE_BUILD_TYPE STREQUAL "Release" AND NOT MSVC)
     target_compile_options(vigil PRIVATE -O3)
 endif()
+
+# Day 4 prep: vendored single-header libraries
+target_include_directories(vigil PRIVATE
+  ${CMAKE_SOURCE_DIR}/third_party/stb
+  ${CMAKE_SOURCE_DIR}/third_party/cgltf
+)
+
+target_sources(vigil PRIVATE
+  third_party/stb/stb_image_impl.cpp
+  third_party/cgltf/cgltf_impl.cpp
+)
