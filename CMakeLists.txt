@@ -147,3 +147,14 @@ target_sources(vigil PRIVATE
   third_party/stb/stb_image_impl.cpp
   third_party/cgltf/cgltf_impl.cpp
 )
+
+# Day 4 prep: vendored single-header libraries
+target_include_directories(vigil PRIVATE
+  ${CMAKE_SOURCE_DIR}/third_party/stb
+  ${CMAKE_SOURCE_DIR}/third_party/cgltf
+)
+
+target_sources(vigil PRIVATE
+  third_party/stb/stb_image_impl.cpp
+  third_party/cgltf/cgltf_impl.cpp
+)
