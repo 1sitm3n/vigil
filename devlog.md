@@ -195,3 +195,48 @@
 - Day 7 deliverable: knight renders in T-pose with all bone-palette
   matrices set to identity — visually identical to a static mesh, but
   the skinning machinery is in place
+
+## Handoff to Day 7 instance
+
+**State at end of Day 6:**
+- Phase 1 complete (Days 1–5): Vulkan foundation, orbit camera, textured cgltf
+  load all working
+- Day 6 complete: knight pipeline validated, knight.glb + 52 animations staged
+  at assets/characters/knight/{knight.glb, anims/}
+- GDD v1.3 and patched roadmap live in docs/; v1.2 retained for diff history
+- FBX2glTF 0.13.1 installed via Rosetta 2; ready for cultist/wraith/sovereign
+  in Weeks 4–5 without re-setup
+- Roll is forward-only (Stand to Roll → roll_forward.glb, ~1.27s native;
+  engine will speed up to 0.5s on Day 14). Shockwave is parry-OR-roll-through
+  per GDD v1.3 §10.
+
+**Day 7 work (per roadmap):**
+- Add skinning attributes to Vertex: vec4 joints (uint16) + vec4 weights (float)
+- Extend Mesh.cpp via cgltf: joint indices/weights, inverse bind matrices,
+  joint parent hierarchy
+- Skeleton struct: array of joint inverse-bind matrices, parent indices,
+  local-space rest transforms
+- Bone-palette UBO: mat4[128], new descriptor set bound per draw
+- Vertex shader: per-vertex blend of up to 4 joint matrices weighted by
+  `weights`, transform position and normal
+- Day 7 deliverable: knight renders in T-pose with all bone-palette matrices
+  set to identity — visually identical to a static mesh, skinning machinery
+  ready for Day 8 animation sampling
+
+**Files the next instance will need on turn 1:**
+- src/render/Vertex.h, Vertex.cpp (extending the vertex format)
+- src/render/Mesh.h, Mesh.cpp (extending cgltf load with skin data)
+- src/render/GraphicsPipeline.h, GraphicsPipeline.cpp (new descriptor set
+  for bone palette)
+- src/render/Renderer.h, Renderer.cpp (UBO allocation + binding)
+- shaders/triangle.vert (skinning math in the vertex stage)
+
+**Watch for:**
+- The two NODE_SKINNED_MESH_* warnings from the validator mean the mesh node
+  isn't root — engine code must transform the armature root, not the mesh
+  node, or skinning will read wrong
+- Mixamo skeleton has ~65 joints; UBO sized at 128 mat4 = 8 KB, well within
+  the 16 KB push-constant-adjacent budget but lives in a UBO not a push
+- cgltf gives you joints as node indices; you'll need to map them to a flat
+  joint array (the order matters — it's what the skin's `joints` array
+  defines)
