@@ -5,6 +5,7 @@
 
 #include <glm/mat4x4.hpp>
 
+#include <array>
 #include <fstream>
 #include <stdexcept>
 #include <vector>
@@ -104,7 +105,8 @@ GraphicsPipeline::GraphicsPipeline(VulkanContext& vk,
     dynamic_state.dynamicStateCount = 2;
     dynamic_state.pDynamicStates    = dynamic_states;
 
-    // Pipeline layout: descriptor set 0 (sampler) + push constants (vertex stage, one mat4).
+    // Pipeline layout: descriptor set 0 (sampler @ binding 0, bone palette UBO @ binding 1)
+    // + push constants (vertex stage, one mat4 MVP).
     VkPushConstantRange push_range{};
     push_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     push_range.offset     = 0;
@@ -154,17 +156,27 @@ GraphicsPipeline::~GraphicsPipeline() {
 }
 
 void GraphicsPipeline::create_descriptor_set_layout() {
-    VkDescriptorSetLayoutBinding sampler_binding{};
-    sampler_binding.binding            = 0;
-    sampler_binding.descriptorType     = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    sampler_binding.descriptorCount    = 1;
-    sampler_binding.stageFlags         = VK_SHADER_STAGE_FRAGMENT_BIT;
-    sampler_binding.pImmutableSamplers = nullptr;
+    std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+
+    // Binding 0: diffuse sampler (fragment stage).
+    bindings[0].binding            = 0;
+    bindings[0].descriptorType     = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorCount    = 1;
+    bindings[0].stageFlags         = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[0].pImmutableSamplers = nullptr;
+
+    // Binding 1: bone palette UBO (vertex stage). Sized for MAX_BONES (128) mat4s
+    // in the shader; the renderer's matching buffer is the same size.
+    bindings[1].binding            = 1;
+    bindings[1].descriptorType     = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bindings[1].descriptorCount    = 1;
+    bindings[1].stageFlags         = VK_SHADER_STAGE_VERTEX_BIT;
+    bindings[1].pImmutableSamplers = nullptr;
 
     VkDescriptorSetLayoutCreateInfo info{};
     info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    info.bindingCount = 1;
-    info.pBindings    = &sampler_binding;
+    info.bindingCount = static_cast<uint32_t>(bindings.size());
+    info.pBindings    = bindings.data();
 
     if (vkCreateDescriptorSetLayout(vk_.device(), &info, nullptr, &descriptor_set_layout_) != VK_SUCCESS) {
         throw std::runtime_error("vkCreateDescriptorSetLayout failed");

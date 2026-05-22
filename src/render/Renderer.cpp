@@ -12,6 +12,7 @@
 #include <array>
 #include <cstdint>
 #include <stdexcept>
+#include <vector>
 
 namespace vigil {
 
@@ -25,6 +26,7 @@ Renderer::Renderer(VulkanContext& vk,
     create_sync_objects();
     create_mesh();
     create_texture();
+    create_bone_palette_buffers();
     create_descriptor_pool();
     create_descriptor_sets();
 }
@@ -96,22 +98,47 @@ void Renderer::create_sync_objects() {
 }
 
 void Renderer::create_mesh() {
-    mesh_ = Mesh(vk_, "assets/test/concrete_cat_statue_1k.gltf");
+    // Day 7 deliverable: the rigged knight in T-pose, with the identity bone
+    // palette below standing in for "no animation applied yet."
+    mesh_ = Mesh(vk_, "assets/characters/knight/knight.glb");
 }
 
 void Renderer::create_texture() {
+    // Still the checker placeholder — glTF material/diffuse extraction is a
+    // Phase 2 cleanup, not on the Day 7 critical path. The knight will render
+    // patterned, which is fine for verifying skinning machinery.
     diffuse_texture_ = Texture(vk_, command_pool_, "assets/test/checker.png");
 }
 
+void Renderer::create_bone_palette_buffers() {
+    const VkDeviceSize palette_size = sizeof(glm::mat4) * MAX_BONES;
+
+    // Identity matrices. With the shader's linear-blend formula and glTF's
+    // normalised weights (sum to 1.0), this produces the same vertex positions
+    // as a non-skinning pipeline — exactly the Day 7 deliverable.
+    const std::vector<glm::mat4> identity_palette(MAX_BONES, glm::mat4(1.0f));
+
+    for (auto& buf : bone_palette_buffers_) {
+        buf = Buffer(
+            vk_, palette_size,
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+        );
+        buf.upload(identity_palette.data(), palette_size);
+    }
+}
+
 void Renderer::create_descriptor_pool() {
-    VkDescriptorPoolSize pool_size{};
-    pool_size.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    pool_size.descriptorCount = FRAMES_IN_FLIGHT;
+    std::array<VkDescriptorPoolSize, 2> pool_sizes{};
+    pool_sizes[0].type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    pool_sizes[0].descriptorCount = FRAMES_IN_FLIGHT;
+    pool_sizes[1].type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    pool_sizes[1].descriptorCount = FRAMES_IN_FLIGHT;
 
     VkDescriptorPoolCreateInfo info{};
     info.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    info.poolSizeCount = 1;
-    info.pPoolSizes    = &pool_size;
+    info.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
+    info.pPoolSizes    = pool_sizes.data();
     info.maxSets       = FRAMES_IN_FLIGHT;
 
     if (vkCreateDescriptorPool(vk_.device(), &info, nullptr, &descriptor_pool_) != VK_SUCCESS) {
@@ -139,16 +166,31 @@ void Renderer::create_descriptor_sets() {
         image_info.imageView   = diffuse_texture_.view();
         image_info.sampler     = diffuse_texture_.sampler();
 
-        VkWriteDescriptorSet write{};
-        write.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet          = descriptor_sets_[i];
-        write.dstBinding      = 0;
-        write.dstArrayElement = 0;
-        write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo      = &image_info;
+        VkDescriptorBufferInfo buffer_info{};
+        buffer_info.buffer = bone_palette_buffers_[i].handle();
+        buffer_info.offset = 0;
+        buffer_info.range  = sizeof(glm::mat4) * MAX_BONES;
 
-        vkUpdateDescriptorSets(vk_.device(), 1, &write, 0, nullptr);
+        std::array<VkWriteDescriptorSet, 2> writes{};
+        writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet          = descriptor_sets_[i];
+        writes[0].dstBinding      = 0;
+        writes[0].dstArrayElement = 0;
+        writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[0].descriptorCount = 1;
+        writes[0].pImageInfo      = &image_info;
+
+        writes[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet          = descriptor_sets_[i];
+        writes[1].dstBinding      = 1;
+        writes[1].dstArrayElement = 0;
+        writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[1].descriptorCount = 1;
+        writes[1].pBufferInfo     = &buffer_info;
+
+        vkUpdateDescriptorSets(vk_.device(),
+                               static_cast<uint32_t>(writes.size()), writes.data(),
+                               0, nullptr);
     }
 }
 
@@ -234,6 +276,8 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
 
+    // Same set binds both the sampler (binding 0) and the bone palette UBO
+    // (binding 1) for the current frame in flight.
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.layout(),
                             0, 1, &descriptor_sets_[current_frame_], 0, nullptr);
 
@@ -254,6 +298,10 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
     const auto now = std::chrono::high_resolution_clock::now();
     const float t = std::chrono::duration<float>(now - start_time_).count();
 
+    // Per glTF spec, the *mesh node*'s transform is ignored for skinned meshes
+    // — only joint transforms (via the bone palette) move the geometry. The
+    // model matrix here is engine-driven (a slow Y rotation for inspection),
+    // not anything from the glTF file.
     glm::mat4 model = glm::rotate(glm::mat4(1.0f), t * 0.3f, glm::vec3(0.0f, 1.0f, 0.0f));
 
     const float aspect = static_cast<float>(ext.width) / static_cast<float>(ext.height);

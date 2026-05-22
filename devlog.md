@@ -240,3 +240,73 @@
 - cgltf gives you joints as node indices; you'll need to map them to a flat
   joint array (the order matters — it's what the skin's `joints` array
   defines)
+
+## Day 7 — 2026-05-22 — Skinning machinery, knight in T-pose
+
+**Shipped:**
+- src/render/Vertex.h — vertex format extended with uvec4 joints and vec4
+  weights, defaults so non-skinned meshes pass through unchanged
+- src/render/Skeleton.h — new struct: joint count, inverse bind matrices,
+  local rest transforms, parent indices (joint-array-local, -1 for outside)
+- src/render/Mesh.{h,cpp} — cgltf skin extraction: per-vertex JOINTS_0 +
+  WEIGHTS_0, owning-node lookup for the skin pointer, IBMs unpacked, joint
+  parents resolved via node*->index map, rest transforms baked from TRS or
+  matrix per node
+- src/render/GraphicsPipeline.cpp — descriptor set layout: binding 0 sampler
+  (frag, unchanged) + binding 1 bone palette UBO (vert)
+- src/render/Renderer.{h,cpp} — per-FIF bone palette Buffer array
+  (mat4[128] = 8 KB), descriptor pool sized for UBO + sampler, both bindings
+  written per set; mesh path swapped to knight.glb
+- shaders/triangle.vert — uvec4/vec4 skin attributes, linear-blend skinning
+  math; identity palette + normalised weights collapses to inPos pass-through
+- Knight renders in T-pose, 52 joints reported, no new validation errors
+
+**Bug found and fixed mid-day:**
+- First run rendered as triangle-sized shards radiating from a central
+  point. Diagnosed via two-step isolation:
+    1. Swapped mesh back to the cat statue → rendered cleanly. Confirmed
+       the new Vertex layout, bone palette UBO, and shader skinning math
+       were sound; the bug was specific to skin extraction.
+    2. Added a debug printf for first three vertices' joints + weights.
+       Output: joints=(0,0,0,0) weights=(0,0,0,0,sum=0).
+- Root cause: FBX2glTF emits both JOINTS_0/WEIGHTS_0 (the real influences)
+  AND JOINTS_1/WEIGHTS_1 (zero-filled fallback for vertices needing >4
+  influences — Mixamo clamps to 4 so these are always zero). In cgltf both
+  sets share the same cgltf_attribute_type; attr.index disambiguates. The
+  attribute switch took whichever came last, landing on the zero set.
+  Weights sum 0 → zero skin matrix → w=0 in clip space → NaN/inf after
+  perspective divide → shards.
+- Fix: gate texcoord/joints/weights cases on attr.index == 0. Also added
+  per-iteration zero-init on the cgltf read buffers as defensive cover.
+
+**Broken / pending:**
+- Bone palette is host-visible host-coherent (right call for Day 8's
+  per-frame update path, not as fast as device-local + staging — fine)
+- Mesh still ignores the glTF's own diffuse texture — knight renders with
+  the Day 4 checker; texture extraction is Phase 2 cleanup
+- Knight has visible backface bleed on the legs (cullMode=NONE plus
+  non-manifold spots in the Tripo mesh). Will close with face culling once
+  winding order is verified across all Tripo-generated assets
+- Knight bounds came out at +-0.5 instead of +-0.9 — model is 1m tall not
+  the intended 1.8m. Either Blender's Ctrl+A -> Apply Scale didn't take or
+  Mixamo's auto-rigger normalised. Cosmetic for now (scroll out with the
+  orbit cam); fix the Blender step before Week 4 so Cultist/Wraith/Pale
+  Sovereign don't all come out at the wrong scale
+- Stale /usr/local/share/vulkan duplicate-layer warnings still emit
+- NODE_SKINNED_MESH_NON_ROOT + UNUSED_OBJECT /skins/N informational
+  warnings carry over from Day 6 — engine correctly ignores the mesh-node
+  transform per the glTF spec
+
+**Notes for tomorrow:**
+- Day 8: animation sampling. cgltf gives us per-channel keyframes for
+  translation/rotation/scale per target joint
+- Animation struct (name, duration, per-channel keyframe arrays) +
+  Animator (current animation, playback time, sample -> local-space joint
+  transforms at time t)
+- Forward kinematics: walk parent_indices in Skeleton, world[i] =
+  world[parent[i]] * local[i]. -1 parents fall back to identity (skin root
+  transform is identity for the Mixamo knight at rest)
+- Final palette: world[i] * inverse_bind_matrices[i], upload to the
+  bone_palette_buffers_[current_frame_] via Buffer::upload each frame
+- Load idle.glb as the smoke-test animation, sample at t = (now -
+  start_time_), watch the knight breathe
