@@ -1,5 +1,7 @@
 #pragma once
 
+#include "anim/Animation.h"
+#include "anim/Animator.h"
 #include "render/Buffer.h"
 #include "render/Mesh.h"
 #include "render/Texture.h"
@@ -21,10 +23,7 @@ class Camera;
 class Renderer {
 public:
     static constexpr uint32_t FRAMES_IN_FLIGHT = 2;
-
-    // Upper bound on joints per skin; UBO is sized to this. Mixamo skeletons
-    // run ~65 joints, so the headroom comfortably covers Vigil's four humanoids.
-    static constexpr uint32_t MAX_BONES = 128;
+    static constexpr uint32_t MAX_BONES        = 128;
 
     Renderer(VulkanContext& vk,
              const Swapchain& swapchain,
@@ -52,6 +51,7 @@ private:
     void create_mesh();
     void create_texture();
     void create_bone_palette_buffers();
+    void create_animation();
     void create_descriptor_pool();
     void create_descriptor_sets();
     void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
@@ -67,13 +67,16 @@ private:
     uint32_t                                current_frame_ = 0;
 
     Mesh                                    mesh_;
-
     Texture                                       diffuse_texture_;
     std::array<Buffer, FRAMES_IN_FLIGHT>          bone_palette_buffers_{};
     VkDescriptorPool                              descriptor_pool_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, FRAMES_IN_FLIGHT> descriptor_sets_{};
 
-    std::chrono::high_resolution_clock::time_point start_time_;
+    Animation                                     idle_animation_;
+    Animator                                      animator_;
+    std::vector<glm::mat4>                        palette_scratch_;
+
+    std::chrono::high_resolution_clock::time_point last_frame_time_;
 };
 
 }  // namespace vigil

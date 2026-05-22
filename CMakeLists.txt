@@ -84,7 +84,6 @@ add_executable(vigil
     src/main.cpp
     src/core/Window.cpp
     src/core/Camera.cpp
-    src/core/Camera.cpp
     src/core/VulkanContext.cpp
     src/render/Swapchain.cpp
     src/render/GraphicsPipeline.cpp
@@ -92,6 +91,8 @@ add_executable(vigil
     src/render/Buffer.cpp
     src/render/Texture.cpp
     src/render/Mesh.cpp
+    src/anim/Animation.cpp
+    src/anim/Animator.cpp
     third_party/stb/stb_image_impl.cpp
     third_party/cgltf/cgltf_impl.cpp
 )

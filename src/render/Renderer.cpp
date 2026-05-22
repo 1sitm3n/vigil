@@ -20,13 +20,16 @@ Renderer::Renderer(VulkanContext& vk,
                    const Swapchain& swapchain,
                    const GraphicsPipeline& pipeline)
     : vk_(vk), swapchain_(swapchain), pipeline_(pipeline) {
-    start_time_ = std::chrono::high_resolution_clock::now();
+    last_frame_time_ = std::chrono::high_resolution_clock::now();
+    palette_scratch_.assign(MAX_BONES, glm::mat4(1.0f));
+
     create_command_pool();
     create_command_buffers();
     create_sync_objects();
     create_mesh();
     create_texture();
     create_bone_palette_buffers();
+    create_animation();
     create_descriptor_pool();
     create_descriptor_sets();
 }
@@ -98,24 +101,15 @@ void Renderer::create_sync_objects() {
 }
 
 void Renderer::create_mesh() {
-    // Day 7 deliverable: the rigged knight in T-pose, with the identity bone
-    // palette below standing in for "no animation applied yet."
     mesh_ = Mesh(vk_, "assets/characters/knight/knight.glb");
 }
 
 void Renderer::create_texture() {
-    // Still the checker placeholder — glTF material/diffuse extraction is a
-    // Phase 2 cleanup, not on the Day 7 critical path. The knight will render
-    // patterned, which is fine for verifying skinning machinery.
     diffuse_texture_ = Texture(vk_, command_pool_, "assets/test/checker.png");
 }
 
 void Renderer::create_bone_palette_buffers() {
     const VkDeviceSize palette_size = sizeof(glm::mat4) * MAX_BONES;
-
-    // Identity matrices. With the shader's linear-blend formula and glTF's
-    // normalised weights (sum to 1.0), this produces the same vertex positions
-    // as a non-skinning pipeline — exactly the Day 7 deliverable.
     const std::vector<glm::mat4> identity_palette(MAX_BONES, glm::mat4(1.0f));
 
     for (auto& buf : bone_palette_buffers_) {
@@ -126,6 +120,13 @@ void Renderer::create_bone_palette_buffers() {
         );
         buf.upload(identity_palette.data(), palette_size);
     }
+}
+
+void Renderer::create_animation() {
+    idle_animation_ = load_animation("assets/characters/knight/anims/idle.glb",
+                                     mesh_.skeleton());
+    animator_.set_skeleton(mesh_.skeleton());
+    animator_.set_animation(idle_animation_);
 }
 
 void Renderer::create_descriptor_pool() {
@@ -210,6 +211,21 @@ void Renderer::draw_frame(const Camera& camera) {
         throw std::runtime_error("vkAcquireNextImageKHR failed");
     }
 
+    // Advance animation, write the new palette into this frame's UBO.
+    // Safe to write because the wait on frame.in_flight above guarantees the
+    // previous draw using this FIF's resources is complete.
+    const auto now = std::chrono::high_resolution_clock::now();
+    const float dt = std::chrono::duration<float>(now - last_frame_time_).count();
+    last_frame_time_ = now;
+
+    animator_.update(dt);
+    // Reset palette to identity so unanimated joints (none, for Mixamo, but
+    // defensive) don't carry stale data from a previous frame.
+    std::fill(palette_scratch_.begin(), palette_scratch_.end(), glm::mat4(1.0f));
+    animator_.compute_bone_palette(palette_scratch_.data());
+    bone_palette_buffers_[current_frame_].upload(palette_scratch_.data(),
+                                                 sizeof(glm::mat4) * MAX_BONES);
+
     vkResetFences(vk_.device(), 1, &frame.in_flight);
     vkResetCommandBuffer(frame.command_buffer, 0);
     record_command_buffer(frame.command_buffer, image_index, camera);
@@ -276,8 +292,6 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.handle());
 
-    // Same set binds both the sampler (binding 0) and the bone palette UBO
-    // (binding 1) for the current frame in flight.
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_.layout(),
                             0, 1, &descriptor_sets_[current_frame_], 0, nullptr);
 
@@ -295,15 +309,9 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
     scissor.extent = ext;
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    const auto now = std::chrono::high_resolution_clock::now();
-    const float t = std::chrono::duration<float>(now - start_time_).count();
-
-    // Per glTF spec, the *mesh node*'s transform is ignored for skinned meshes
-    // — only joint transforms (via the bone palette) move the geometry. The
-    // model matrix here is engine-driven (a slow Y rotation for inspection),
-    // not anything from the glTF file.
-    glm::mat4 model = glm::rotate(glm::mat4(1.0f), t * 0.3f, glm::vec3(0.0f, 1.0f, 0.0f));
-
+    // Animator drives all motion now; the model matrix is plain identity.
+    // Per glTF spec, the mesh node's transform is ignored for skinned meshes.
+    glm::mat4 model = glm::mat4(1.0f);
     const float aspect = static_cast<float>(ext.width) / static_cast<float>(ext.height);
     glm::mat4 mvp = camera.projection(aspect) * camera.view() * model;
 

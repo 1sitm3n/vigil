@@ -310,3 +310,97 @@
   bone_palette_buffers_[current_frame_] via Buffer::upload each frame
 - Load idle.glb as the smoke-test animation, sample at t = (now -
   start_time_), watch the knight breathe
+
+---
+
+## Day 8 — Animation sampling
+
+**Goal:** take the Day 7 skinning machinery (knight in T-pose, identity bone palette) and make it sample an actual Mixamo animation. Knight should idle.
+
+### What landed
+
+New `src/anim/` directory:
+
+- `Animation.h` / `Animation.cpp` — `AnimChannel` (target joint, path enum, times, values), `Animation` (name, duration, channels), and a `load_animation(path, target_skeleton)` that pulls channels out of a Mixamo `.glb` and maps node names to the knight's joint indices (with a `mixamorig:` prefix-strip fallback so files with mismatched prefixes still resolve).
+- `Animator.h` / `Animator.cpp` — owns a skeleton pointer + an active animation, advances playback time on `update(dt)` with looping `fmod`, writes the bone palette on `compute_bone_palette(mat4*)`.
+
+Updates:
+
+- `Skeleton.h` — replaced Day 7's composed `local_rest_transforms` with split `rest_translation` / `rest_rotation` / `rest_scale` so animation channels can override one TRS component at a time. Added `joint_names` so channels resolve by name.
+- `Mesh.cpp` — `node_to_trs()` helper that pulls T / R / S directly from `cgltf_node`. Matrix-form nodes aren't supported yet — logs and falls back to identity if we ever hit one.
+- `Renderer.{h,cpp}` — owns one `Animation idle_animation_` and one `Animator animator_`. New `create_animation()` loads `assets/characters/knight/anims/idle.glb`. `draw_frame()` computes dt from `last_frame_time_`, ticks the animator, calls `compute_bone_palette()` into a scratch array, then memcpys into `bone_palette_buffers_[current_frame_]` **after** the in-flight fence wait so the upload doesn't race the GPU still reading the previous frame's palette. Removed the Day 4–7 model rotation in `record_command_buffer`; model matrix is identity now.
+
+Load output is clean: `53 channels kept, 0 unresolvable target nodes, duration 3.500s`. That's 52 joint rotations plus one root translation — the standard Mixamo "in place" idle layout.
+
+### The bug: rest pose broken too
+
+First run with animation enabled, legs spread wide, upper body collapsed into a thin vertical sliver. Disabled the animation entirely (commented out `animator_.set_animation`, so `compute_bone_palette` falls through to pure rest TRS via the FK pipeline). Still broken — body and head OK, **arms completely missing**.
+
+That ruled out animation sampling as the cause. With no channels overriding, `world[i] * IBM[i]` must equal identity for every joint and the render must match Day 7's T-pose. It didn't. The bug had to be in either rest TRS extraction, FK, or IBM application.
+
+Hypothesis: `skin->joints` was not topologically sorted. My FK was a single forward pass:
+
+```cpp
+for (uint32_t i = 0; i < N; ++i) {
+    const int32_t parent = skeleton_->parent_indices[i];
+    world[i] = (parent >= 0) ? world[parent] * local : local;
+}
+```
+
+That assumes `parent_indices[i] < i` everywhere. If any joint's parent appears later in the array, `world[parent]` is uninitialised — glm's default `mat4` constructor leaves storage uninitialised in this build config — and the child gets garbage. The leg chain branches from Hips at index 0 and would survive almost any ordering; the arms branching through Spine → Spine1 → Spine2 → Shoulder are far more sensitive.
+
+Added a one-shot hierarchy dump from `Mesh.cpp`. Confirmed:
+[Skeleton] hierarchy (52 joints):
+[ 0] mixamorig:Hips             parent= -1
+[ 1] mixamorig:LeftUpLeg        parent=  0
+[ 2] mixamorig:RightUpLeg       parent=  0
+[ 3] mixamorig:Spine            parent=  0
+[ 4] mixamorig:Spine2           parent= 27   <-- non-topological
+[ 5] mixamorig:LeftArm          parent=  6   <-- non-topological
+[ 6] mixamorig:LeftShoulder     parent=  4
+...
+[27] mixamorig:Spine1           parent=  3
+...
+[Skeleton] WARNING: 5 joints have parent index >= their own index
+
+Five offenders total: `Spine2(4) → Spine1(27)`, `LeftArm(5) → LeftShoulder(6)`, `RightHandThumb1(9) → RightHand(24)`, `LeftHandThumb1(12) → LeftHand(26)`, `LeftHandIndex3(35) → LeftHandIndex2(36)`. Spine2 is the bad one — it sits at the root of the entire upper-body chain. When the loop processed Spine2 at i=4, `world[27]` was uninitialised memory; from then on Neck, Head, both shoulders, both arms, both hands, and every finger inherited garbage. That matches the symptom precisely: legs perfectly fine, everything above the diaphragm scrambled.
+
+This is presumably a Mixamo / FBX2glTF quirk — Mixamo's FBX retains the hierarchy semantically but doesn't promise array order, and FBX2glTF doesn't re-sort. Worth remembering for Cultist / Wraith / Pale Sovereign in Week 4: same pipeline, same bug if FK isn't order-independent.
+
+### The fix
+
+Replaced the forward pass with a memoised recursion in `Animator::compute_bone_palette`:
+
+```cpp
+std::vector<glm::mat4> world(N);
+std::vector<uint8_t>   computed(N, 0);
+std::function<void(uint32_t)> walk = [&](uint32_t i) {
+    if (computed[i]) return;
+    const int32_t parent = skeleton_->parent_indices[i];
+    if (parent >= 0) walk(static_cast<uint32_t>(parent));
+    const glm::mat4 local = glm::translate(glm::mat4(1.0f), t[i])
+                          * glm::mat4_cast(r[i])
+                          * glm::scale(glm::mat4(1.0f), s[i]);
+    world[i] = (parent >= 0) ? world[parent] * local : local;
+    computed[i] = 1;
+};
+for (uint32_t i = 0; i < N; ++i) walk(i);
+```
+
+The `computed[]` flag collapses repeated walks — for a topologically-sorted skin every joint is hit exactly once and the cost matches the original loop. For a non-topo skin every joint is hit at most twice (once on its own iteration, once when walked as somebody's parent). `std::function` overhead is meaningless at 52 joints once per frame.
+
+### Result
+
+Knight plays the Mixamo combat idle: bent knees, hands raised in a fighter's guard, looping cleanly at 3.5s. Legs, spine, head, arms all render correctly through the full FK chain.
+
+### Day 7 leftovers still standing
+
+- 1m bind-pose height instead of 1.8m (Blender Apply Scale didn't take, or Mixamo normalised). Cosmetic; fix before Week 4.
+- Knight uses the Day 4 checker texture, not the diffuse from `knight.glb`. Phase 2 cleanup.
+- Visible backface bleed on legs (`cullMode = NONE` plus non-manifold Tripo spots).
+- Stale `/usr/local/share/vulkan` duplicate-layer warnings on startup.
+- `NODE_SKINNED_MESH_NON_ROOT` informational glTF warning (we intentionally ignore the mesh-node transform on skinned meshes per spec).
+
+### Next (Day 9)
+
+Same pipeline, different `.glb`. Swap the load path from `idle.glb` to `walk.glb` / `run.glb` / `slash.glb` and confirm the 50-odd anims in the Mixamo pack all drive the same skeleton without surprises. Then wire animation selection to game state — first the Idle / Walk / Jog state machine from GDD §6.
