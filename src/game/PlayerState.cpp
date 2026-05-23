@@ -107,3 +107,31 @@ bool PlayerState::iframes_active() const {
 }
 
 }  // namespace vigil
+
+namespace vigil {
+
+const char* to_string(PlayerStateId id) {
+    switch (id) {
+        case PlayerStateId::Idle:    return "Idle";
+        case PlayerStateId::Walk:    return "Walk";
+        case PlayerStateId::Jog:     return "Jog";
+        case PlayerStateId::Attack1: return "Attack1";
+        case PlayerStateId::Attack2: return "Attack2";
+        case PlayerStateId::Attack3: return "Attack3";
+        case PlayerStateId::Roll:    return "Roll";
+        case PlayerStateId::Count:   return "Count";
+    }
+    return "?";
+}
+
+const char* to_string(AttackPhase phase) {
+    switch (phase) {
+        case AttackPhase::None:     return "None";
+        case AttackPhase::Startup:  return "Startup";
+        case AttackPhase::Active:   return "Active";
+        case AttackPhase::Recovery: return "Recovery";
+    }
+    return "?";
+}
+
+}  // namespace vigil

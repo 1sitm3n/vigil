@@ -20,6 +20,7 @@ class VulkanContext;
 class Swapchain;
 class GraphicsPipeline;
 class Camera;
+class Window;
 
 class Renderer {
 public:
@@ -28,7 +29,8 @@ public:
 
     Renderer(VulkanContext& vk,
              const Swapchain& swapchain,
-             const GraphicsPipeline& pipeline);
+             const GraphicsPipeline& pipeline,
+             Window& window);
     ~Renderer();
 
     Renderer(const Renderer&) = delete;
@@ -36,6 +38,9 @@ public:
     Renderer(Renderer&&) = delete;
     Renderer& operator=(Renderer&&) = delete;
 
+    // main.cpp calls this between ImGui::NewFrame and ImGui::Render so the
+    // overlay's draw data is finalised by the time we record commands.
+    void draw_debug_overlay(const PlayerState& player, float dt);
     void draw_frame(const Camera& camera, const PlayerState& player);
     void wait_idle();
 
@@ -62,8 +67,11 @@ private:
     void create_texture();
     void create_bone_palette_buffers();
     void load_animations();
+    void inspect_attack_candidates();
     void create_descriptor_pool();
     void create_descriptor_sets();
+    void init_imgui();
+    void shutdown_imgui();
     void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
                                const Camera& camera);
     void switch_to(PlayerStateId id, float fade);
@@ -71,6 +79,7 @@ private:
     VulkanContext&          vk_;
     const Swapchain&        swapchain_;
     const GraphicsPipeline& pipeline_;
+    Window&                 window_;
 
     VkCommandPool                           command_pool_ = VK_NULL_HANDLE;
     std::array<FrameData, FRAMES_IN_FLIGHT> frames_{};
@@ -83,9 +92,19 @@ private:
     VkDescriptorPool                              descriptor_pool_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, FRAMES_IN_FLIGHT> descriptor_sets_{};
 
+    // Separate descriptor pool for ImGui — it allocates its own font texture
+    // descriptor + any user-bound textures. Don't share with the main pool.
+    VkDescriptorPool imgui_descriptor_pool_ = VK_NULL_HANDLE;
+    bool             imgui_ready_           = false;
+
     std::array<AnimSlot, static_cast<size_t>(PlayerStateId::Count)> anim_slots_;
     Animator                                      animator_;
     std::vector<glm::mat4>                        palette_scratch_;
+
+    // FPS rolling average for the overlay.
+    static constexpr size_t FPS_WINDOW = 60;
+    std::array<float, FPS_WINDOW> fps_window_{};
+    size_t fps_cursor_ = 0;
 
     std::chrono::high_resolution_clock::time_point last_frame_time_;
 };

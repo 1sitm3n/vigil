@@ -56,6 +56,28 @@ FetchContent_Declare(vk-bootstrap
 )
 FetchContent_MakeAvailable(vk-bootstrap)
 
+# Dear ImGui — no upstream CMakeLists, sources compiled into the vigil target.
+# v1.91.5: SDL3 backend stable; ImGui_ImplVulkan_InitInfo carries RenderPass
+# directly (no separate render-pass arg); font texture upload is now lazy on
+# the first ImGui_ImplVulkan_NewFrame so no explicit CreateFontsTexture call.
+FetchContent_Declare(imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG        v1.91.5
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(imgui)
+
+set(IMGUI_SOURCES
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/imgui_demo.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+)
+message(STATUS "ImGui source dir:   ${imgui_SOURCE_DIR}")
+
 file(GLOB SHADER_SOURCES
     "${CMAKE_SOURCE_DIR}/shaders/*.vert"
     "${CMAKE_SOURCE_DIR}/shaders/*.frag"
@@ -96,6 +118,7 @@ add_executable(vigil
     src/game/PlayerState.cpp
     third_party/stb/stb_image_impl.cpp
     third_party/cgltf/cgltf_impl.cpp
+    ${IMGUI_SOURCES}
 )
 
 add_dependencies(vigil shaders)
@@ -112,7 +135,10 @@ target_include_directories(vigil PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party
     ${CMAKE_SOURCE_DIR}/third_party/stb
     ${CMAKE_SOURCE_DIR}/third_party/cgltf
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
 )
+
 
 if(APPLE)
     target_compile_definitions(vigil PRIVATE
@@ -127,6 +153,18 @@ else()
         -Wall -Wextra -Wpedantic
         -Wno-unused-parameter
         -Wno-missing-field-initializers
+    )
+    # ImGui backend sources trip these on Clang; silence locally without
+    # touching the project's own diagnostic level.
+    set_source_files_properties(
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+        ${imgui_SOURCE_DIR}/imgui.cpp
+        ${imgui_SOURCE_DIR}/imgui_draw.cpp
+        ${imgui_SOURCE_DIR}/imgui_tables.cpp
+        ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+        ${imgui_SOURCE_DIR}/imgui_demo.cpp
+        PROPERTIES COMPILE_FLAGS "-Wno-unused-function -Wno-sign-compare -Wno-old-style-cast"
     )
 endif()
 

@@ -4,15 +4,21 @@
 #include "render/Vertex.h"
 #include "core/VulkanContext.h"
 #include "core/Camera.h"
+#include "core/Window.h"
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <imgui.h>
+#include <backends/imgui_impl_sdl3.h>
+#include <backends/imgui_impl_vulkan.h>
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
+#include <numeric>
 #include <stdexcept>
 #include <vector>
 
@@ -21,12 +27,14 @@ namespace vigil {
 namespace {
 constexpr float kCrossfadeDuration  = 0.2f;  // roadmap Day 9: 0.2s blend.
 constexpr float kRollTargetDuration = 0.5f;  // GDD §6: roll lasts 0.5s.
+constexpr float kAtkTargetDuration  = 0.8f;  // GDD §6: light atk 0.30+0.10+0.40s.
 }  // namespace
 
 Renderer::Renderer(VulkanContext& vk,
                    const Swapchain& swapchain,
-                   const GraphicsPipeline& pipeline)
-    : vk_(vk), swapchain_(swapchain), pipeline_(pipeline) {
+                   const GraphicsPipeline& pipeline,
+                   Window& window)
+    : vk_(vk), swapchain_(swapchain), pipeline_(pipeline), window_(window) {
     last_frame_time_ = std::chrono::high_resolution_clock::now();
     palette_scratch_.assign(MAX_BONES, glm::mat4(1.0f));
 
@@ -37,12 +45,15 @@ Renderer::Renderer(VulkanContext& vk,
     create_texture();
     create_bone_palette_buffers();
     load_animations();
+    inspect_attack_candidates();
     create_descriptor_pool();
     create_descriptor_sets();
+    init_imgui();
 }
 
 Renderer::~Renderer() {
     wait_idle();
+    shutdown_imgui();
 
     for (auto& frame : frames_) {
         if (frame.image_available) vkDestroySemaphore(vk_.device(), frame.image_available, nullptr);
@@ -51,8 +62,9 @@ Renderer::~Renderer() {
     for (auto sem : render_finished_) {
         if (sem) vkDestroySemaphore(vk_.device(), sem, nullptr);
     }
-    if (descriptor_pool_) vkDestroyDescriptorPool(vk_.device(), descriptor_pool_, nullptr);
-    if (command_pool_)    vkDestroyCommandPool(vk_.device(), command_pool_, nullptr);
+    if (descriptor_pool_)       vkDestroyDescriptorPool(vk_.device(), descriptor_pool_,       nullptr);
+    if (imgui_descriptor_pool_) vkDestroyDescriptorPool(vk_.device(), imgui_descriptor_pool_, nullptr);
+    if (command_pool_)          vkDestroyCommandPool(vk_.device(), command_pool_, nullptr);
 }
 
 void Renderer::wait_idle() {
@@ -148,17 +160,52 @@ void Renderer::load_animations() {
     // class owns position from Day 11). Roll keeps root motion — the 4m
     // forward distance from GDD §6 lives in the animation, not in code —
     // and gets its native ~1.27s compressed to the 0.5s spec.
+    //
+    // Attack slots: Day 10 — compress to the 0.8s GDD budget so the SM phase
+    // timeline (0.30 startup + 0.10 active + 0.40 recovery) lines up with
+    // the swing. slash_v2.glb at 3.500s native -> 4.375x will look snappy;
+    // confirm visually and swap to a shorter clip from the candidate set
+    // (see inspect_attack_candidates() console output) if it reads poorly.
     load_slot(PlayerStateId::Idle,    "assets/characters/knight/anims/idle.glb",         true,  0.0f);
     load_slot(PlayerStateId::Walk,    "assets/characters/knight/anims/walk.glb",         true,  0.0f);
     load_slot(PlayerStateId::Jog,     "assets/characters/knight/anims/run.glb",          true,  0.0f);
-    load_slot(PlayerStateId::Attack1, "assets/characters/knight/anims/slash.glb",        true,  0.0f);
-    load_slot(PlayerStateId::Attack2, "assets/characters/knight/anims/slash_v2.glb",     true,  0.0f);
-    load_slot(PlayerStateId::Attack3, "assets/characters/knight/anims/slash_v3.glb",     true,  0.0f);
+    load_slot(PlayerStateId::Attack1, "assets/characters/knight/anims/slash.glb",        true,  kAtkTargetDuration);
+    load_slot(PlayerStateId::Attack2, "assets/characters/knight/anims/slash_v5.glb",     true,  kAtkTargetDuration);
+    load_slot(PlayerStateId::Attack3, "assets/characters/knight/anims/slash_v3.glb",     true,  kAtkTargetDuration);
     load_slot(PlayerStateId::Roll,    "assets/characters/knight/anims/roll_forward.glb", false, kRollTargetDuration);
 
     animator_.set_skeleton(mesh_.skeleton());
     // Snap-load Idle as the starting pose (no blend on first frame).
     switch_to(PlayerStateId::Idle, 0.0f);
+}
+
+void Renderer::inspect_attack_candidates() {
+    // Day 10 audit: load every plausible attack source clip so the console
+    // shows native durations side-by-side. Pick three with native ~1.0–1.5s
+    // (so the compression-to-0.8s ratio stays under 2x — Day 9 notes flag
+    // >4x as visibly jittery). Remove this call once the combo set is
+    // locked.
+    static const char* const candidates[] = {
+        "assets/characters/knight/anims/slash.glb",
+        "assets/characters/knight/anims/slash_v5.glb",
+        "assets/characters/knight/anims/slash_v3.glb",
+        "assets/characters/knight/anims/slash_v4.glb",
+        "assets/characters/knight/anims/slash_v5.glb",
+        "assets/characters/knight/anims/attack.glb",
+        "assets/characters/knight/anims/attack_v2.glb",
+        "assets/characters/knight/anims/attack_v3.glb",
+        "assets/characters/knight/anims/attack_v4.glb",
+    };
+    std::printf("[Anim] === Attack candidate audit (native durations) ===\n");
+    for (const char* path : candidates) {
+        try {
+            Animation a = load_animation(path, mesh_.skeleton());
+            std::printf("[Anim]   %-52s -> %.3fs\n", path, a.duration);
+        } catch (const std::exception& e) {
+            std::printf("[Anim]   %-52s -> SKIP (%s)\n", path, e.what());
+        }
+    }
+    std::printf("[Anim] === end audit ===\n");
 }
 
 void Renderer::switch_to(PlayerStateId id, float fade) {
@@ -230,6 +277,120 @@ void Renderer::create_descriptor_sets() {
                                static_cast<uint32_t>(writes.size()), writes.data(),
                                0, nullptr);
     }
+}
+
+void Renderer::init_imgui() {
+    // Generous descriptor pool: ImGui spec docs recommend 1k of each type
+    // for headroom against user-bound textures. The font texture alone needs
+    // one combined-image-sampler.
+    const std::array<VkDescriptorPoolSize, 1> pool_sizes{{
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
+    }};
+
+    VkDescriptorPoolCreateInfo pool_info{};
+    pool_info.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pool_info.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    pool_info.maxSets       = 1000;
+    pool_info.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
+    pool_info.pPoolSizes    = pool_sizes.data();
+    if (vkCreateDescriptorPool(vk_.device(), &pool_info, nullptr, &imgui_descriptor_pool_) != VK_SUCCESS) {
+        throw std::runtime_error("ImGui: vkCreateDescriptorPool failed");
+    }
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    ImGui::StyleColorsDark();
+
+    if (!ImGui_ImplSDL3_InitForVulkan(window_.native_handle())) {
+        throw std::runtime_error("ImGui_ImplSDL3_InitForVulkan failed");
+    }
+
+    // v1.91: RenderPass lives in InitInfo; no separate render-pass arg to
+    // ImGui_ImplVulkan_Init. Font texture upload is lazy on first
+    // ImGui_ImplVulkan_NewFrame — no explicit CreateFontsTexture call.
+    ImGui_ImplVulkan_InitInfo init_info{};
+    init_info.Instance       = vk_.instance();
+    init_info.PhysicalDevice = vk_.physical_device();
+    init_info.Device         = vk_.device();
+    init_info.QueueFamily    = vk_.graphics_family();
+    init_info.Queue          = vk_.graphics_queue();
+    init_info.DescriptorPool = imgui_descriptor_pool_;
+    init_info.RenderPass     = swapchain_.render_pass();
+    init_info.Subpass        = 0;
+    init_info.MinImageCount  = FRAMES_IN_FLIGHT;
+    init_info.ImageCount     = swapchain_.image_count();
+    init_info.MSAASamples    = VK_SAMPLE_COUNT_1_BIT;
+    init_info.PipelineCache  = VK_NULL_HANDLE;
+    init_info.Allocator      = nullptr;
+    init_info.CheckVkResultFn = nullptr;
+
+    if (!ImGui_ImplVulkan_Init(&init_info)) {
+        throw std::runtime_error("ImGui_ImplVulkan_Init failed");
+    }
+
+    imgui_ready_ = true;
+    std::printf("[ImGui] Initialised (Vulkan + SDL3 backends, v%s)\n", IMGUI_VERSION);
+}
+
+void Renderer::shutdown_imgui() {
+    if (!imgui_ready_) return;
+    ImGui_ImplVulkan_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
+    ImGui::DestroyContext();
+    imgui_ready_ = false;
+}
+
+void Renderer::draw_debug_overlay(const PlayerState& player, float dt) {
+    if (!imgui_ready_) return;
+
+    // FPS rolling window.
+    fps_window_[fps_cursor_] = dt;
+    fps_cursor_ = (fps_cursor_ + 1) % FPS_WINDOW;
+    const float dt_sum = std::accumulate(fps_window_.begin(), fps_window_.end(), 0.0f);
+    const float avg_dt = dt_sum > 0.0f ? dt_sum / static_cast<float>(FPS_WINDOW) : dt;
+    const float fps    = avg_dt > 0.0f ? 1.0f / avg_dt : 0.0f;
+
+    ImGui::SetNextWindowPos({16, 16}, ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.78f);
+    constexpr ImGuiWindowFlags kFlags =
+        ImGuiWindowFlags_NoDecoration   | ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+        ImGuiWindowFlags_NoNav;
+
+    ImGui::Begin("Vigil — Day 10", nullptr, kFlags);
+
+    ImGui::Text("FPS  %6.1f   dt %5.2f ms", fps, avg_dt * 1000.0f);
+    ImGui::Separator();
+
+    ImGui::Text("State        %s", to_string(player.id()));
+    ImGui::Text("AttackPhase  %s", to_string(player.attack_phase()));
+    ImGui::Text("state_time   %.3f s", player.state_time());
+    ImGui::Text("attack_buf   %s", player.attack_buffered() ? "YES" : "  -");
+
+    // i-frames dot: red while active, dim otherwise. Reviewers see at a
+    // glance whether the roll is currently absorbing damage.
+    const bool iframes = player.iframes_active();
+    const ImU32 dot_col = iframes ? IM_COL32(220, 60, 60, 255)
+                                  : IM_COL32(80, 80, 80, 255);
+    ImGui::Text("i-frames    ");
+    ImGui::SameLine();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float  r = ImGui::GetFontSize() * 0.45f;
+    ImGui::GetWindowDrawList()->AddCircleFilled(
+        ImVec2(p.x + r, p.y + ImGui::GetFontSize() * 0.5f), r, dot_col);
+    ImGui::Dummy(ImVec2(r * 2.0f + 6.0f, ImGui::GetFontSize()));
+
+    ImGui::Separator();
+    ImGui::Text("anim.t       %.3f s", animator_.playback_time());
+    ImGui::Text("blending     %s", animator_.is_blending() ? "yes" : "no");
+    if (animator_.is_blending()) {
+        ImGui::Text("blend_t      %.2f", animator_.blend_t());
+        ImGui::ProgressBar(animator_.blend_t(), ImVec2(180, 0), "");
+    }
+
+    ImGui::End();
 }
 
 void Renderer::draw_frame(const Camera& camera, const PlayerState& player) {
@@ -365,6 +526,15 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
     vkCmdBindIndexBuffer(cmd, mesh_.index_buffer_handle(), 0, VK_INDEX_TYPE_UINT32);
 
     vkCmdDrawIndexed(cmd, mesh_.index_count(), 1, 0, 0, 0);
+
+    // ImGui overlay layered on top of the mesh, still inside the main render
+    // pass. Draw data was finalised by main.cpp's ImGui::Render() call
+    // earlier this frame.
+    if (imgui_ready_) {
+        if (ImDrawData* dd = ImGui::GetDrawData()) {
+            ImGui_ImplVulkan_RenderDrawData(dd, cmd);
+        }
+    }
 
     vkCmdEndRenderPass(cmd);
 

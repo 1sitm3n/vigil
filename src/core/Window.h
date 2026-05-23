@@ -3,6 +3,7 @@
 #include <SDL3/SDL.h>
 #include <vulkan/vulkan.h>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -27,6 +28,12 @@ struct InputFrame {
     bool  space_pressed = false;
 };
 
+// Day-10 refactor: poll_events takes an optional per-event callback so the
+// ImGui SDL3 backend can see raw SDL_Event payloads BEFORE Window's own
+// switch consumes them. ImGui needs every event (keyboard, mouse, text) to
+// keep its IO state correct, so the callback fires first in the loop.
+using EventCallback = std::function<void(const SDL_Event&)>;
+
 class Window {
 public:
     Window(int width, int height, const std::string& title);
@@ -37,7 +44,7 @@ public:
     Window(Window&&) = delete;
     Window& operator=(Window&&) = delete;
 
-    void       poll_events();
+    void       poll_events(const EventCallback& on_event = {});
     InputFrame consume_input();
     bool       should_close() const { return should_close_; }
 

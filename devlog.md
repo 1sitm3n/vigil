@@ -634,3 +634,184 @@
   Week 4 so Cultist/Wraith/Sovereign don't all come out short
 - Mid-blend play() restart-from-current pop is mostly invisible
   but worth a snapshot-as-current fix if reviewers hammer input
+
+## Day 10 — 2026-05-23 — ImGui overlay + Phase 2 close-out
+
+**Shipped:**
+- ImGui v1.91.5 vendored via FetchContent (cmake configures it as
+  sources compiled into the vigil target, no upstream CMakeLists).
+  Vulkan + SDL3 backends initialised cleanly on MoltenVK / M3
+- Window::poll_events refactored to take an optional
+  std::function<void(const SDL_Event&)> so ImGui_ImplSDL3_ProcessEvent
+  sees raw events BEFORE Window's switch consumes them. Existing
+  callers that pass nothing keep working — the callback's default
+  is empty
+- Renderer owns the entire ImGui lifecycle: dedicated 1000-slot
+  combined-image-sampler descriptor pool (separate from the main
+  pool — Khronos sample recipe), init in ctor, shutdown in dtor
+- ImGui_ImplVulkan_RenderDrawData layered inside
+  record_command_buffer after vkCmdDrawIndexed and BEFORE
+  vkCmdEndRenderPass, so the overlay draws into the same render
+  pass as the mesh. main.cpp calls ImGui::Render() before
+  renderer.draw_frame() so the draw data is finalised by the time
+  recording starts
+- Debug overlay (top-left, ~78% opacity, no-decoration, no-nav):
+  FPS rolling 60-frame avg + dt(ms), State, AttackPhase,
+  state_time, attack_buf YES/-, i-frames red dot, anim.t,
+  blending bool + blend_t ProgressBar during active crossfade
+- Animator::blend_t() exposed so the overlay can visualise the
+  0.2s crossfade ramp filling left-to-right
+- PlayerState::attack_buffered() accessor +
+  to_string(PlayerStateId) / to_string(AttackPhase) free functions
+  in PlayerState for overlay label rendering
+- Attack-anim audit via inspect_attack_candidates() — loads every
+  slash_v*/attack_v* glb on disk at startup and printf's native
+  duration. Confirmed slash_v2 @ 3.500s == idle @ 3.500s exactly
+  (the smoking gun for mis-tagged Mixamo export)
+- Combo set locked: slash.glb (1.500s -> 1.875x), slash_v5.glb
+  (1.367s -> 1.708x, swapped in for slash_v2), slash_v3.glb
+  (1.567s -> 1.958x). All under 2x compression, none in Day-9's
+  ">4x looks jittery" zone
+- target_duration = 0.80s applied to all three attack slots so
+  any future filename swap stays budget-correct without touching
+  the SM phase data (GDD §6: 0.30 startup + 0.10 active + 0.40
+  recovery = 0.80)
+- Phase 2 retrospective clip captured to
+  marketing/day10_phase_checkpoint.mp4 — 60s, overlay visible
+  in corner, full state cycle (Idle->Walk->Jog->combo->Roll->Idle)
+
+**Crash bisected + fixed:**
+- First run after ImGui integration: SIGSEGV at pc=0x0 inside
+  ImGui_ImplVulkan_Init+200. Cause: CMakeLists had
+  `target_compile_definitions(... IMGUI_IMPL_VULKAN_NO_PROTOTYPES=0)`
+  — the backend checks `#if defined(...)`, not the value, so =0
+  still flips it to loader mode where every vk* function pointer
+  stays NULL until ImGui_ImplVulkan_LoadFunctions() runs.
+  Fix: removed the define entirely; find_package(Vulkan) +
+  Vulkan::Vulkan provides direct prototypes which is the
+  backend's default mode. Re-run = clean init
+
+**Broken / pending:**
+- 1m bind-pose carried from Day 7 — Blender re-upload before
+  Week 4 so Cultist/Wraith/Sovereign don't inherit the scale
+- Checker texture instead of knight diffuse, carried from Day 7
+- Backface bleed on legs, carried from Day 7
+- Mid-blend play() restart-from-current pop, carried from Day 9
+- inspect_attack_candidates() still called unconditionally at
+  startup; remove once we're sure no Week-4 character will want
+  a re-audit
+- Stale /usr/local/share/vulkan duplicate-layer warnings,
+  carry since Day 1
+- Knight at world origin, camera at world origin too — visible
+  drift on Roll (knight leaves frame). Day 11's Player class +
+  follow camera fixes by construction
+
+**Phase 2 GATE — ALL GREEN:**
+- [x] Knight runs seven animations smoothly
+      (Idle, Walk, Jog, Attack1, Attack2, Attack3, Roll)
+- [x] State machine handles all transitions with 0.2s crossfade
+- [x] ImGui debug overlay shows live SM + animator state
+- [x] FPS holds 60+ on M3 Air at 1440x900 (60.2 avg, 16.6 ms)
+- [x] 60s portfolio-grade clip in marketing/
+
+**Notes for tomorrow:**
+- Day 11: Phase 3 (Combat Core) opens. Per roadmap, the day's
+  deliverable is a Player class with WASD movement + third-person
+  follow camera + mouse-look. End-of-day demo: knight walks
+  around a flat plane, anim transitions Idle <-> Walk <-> Jog
+  correctly
+- Create src/game/Player.{h,cpp}. Owns position vec3, facing yaw,
+  velocity vec3, and the PlayerState (move ownership up from
+  main.cpp). update(dt, InputFrame, camera) drives the SM and
+  applies camera-relative locomotion
+- WASD camera-relative: input vector rotated by camera yaw into
+  world space. Use Camera::forward_xz()/right_xz() — Phase 1
+  already got the rotation correct, don't re-derive
+- Walk 3.0 m/s, sprint 6.0 m/s (Shift). Track stamina intent but
+  don't drain yet — Day 13 lands the drain
+- Camera flips from RMB-orbit-at-origin to always-on follow at
+  offset ~(2.2m behind, 5.0m above) the player, mouse-look
+  yaw/pitch with SDL_SetWindowRelativeMouseMode(true) for the
+  session. Scroll-zoom optional; Esc still quits
+- Renderer::draw_frame gains a world-transform input (replaces
+  the model = identity in record_command_buffer)
+- Roll's 4m root motion will now read on-screen correctly because
+  the camera follows. But the Player must also commit position
+  from the anim's root each frame during Roll, or the next state
+  snaps back. Easiest path: Player reads animator root joint
+  during Roll and writes its own position to match
+- Phase 2's ImGui overlay is now permanent infrastructure. Extend
+  it for Phase 3: add player position, velocity magnitude,
+  facing yaw, stamina/HP/Faith bars (placeholders for now)
+
+## Handoff to Day 11 instance
+
+**State at end of Day 10 / Phase 2:**
+- Phase 2 COMPLETE. All checkpoint gates green. 60s portfolio
+  clip in marketing/day10_phase_checkpoint.mp4
+- ImGui v1.91.5 fully integrated. Backend uses direct prototypes
+  (NO IMGUI_IMPL_VULKAN_NO_PROTOTYPES define — that was the bug
+  that crashed Init at NULL fp on Day 10; do not re-add)
+- Window::poll_events takes std::function<void(const SDL_Event&)>.
+  main.cpp wires ImGui_ImplSDL3_ProcessEvent through it
+- Renderer owns ImGui lifecycle. Separate descriptor pool
+  (imgui_descriptor_pool_) from the main one; do NOT share
+- ImGui::Render() must run BEFORE renderer.draw_frame() — main.cpp
+  does this. RenderDrawData fires inside record_command_buffer
+  after the mesh draw, before vkCmdEndRenderPass
+- Attack combo locked: slash / slash_v5 / slash_v3, all targeting
+  0.80s. inspect_attack_candidates() is debug helper; remove its
+  call in Renderer ctor when ready
+- Knight + camera both at world origin. Day 11 introduces a
+  Player position + follow camera by construction
+
+**Day 11 work (per roadmap Phase 3 opening):**
+- src/game/Player.{h,cpp}: position (vec3), facing (yaw float),
+  velocity (vec3). update(dt, InputFrame, Camera) — input from
+  Window, camera supplies forward_xz/right_xz for camera-relative
+  WASD. Player owns PlayerState; main.cpp shifts from holding
+  PlayerState directly to holding Player
+- Walk 3.0 m/s, sprint 6.0 m/s. Locomotion direction = WASD
+  vector rotated into world space via camera yaw. Player yaw
+  slerps to face movement direction (try 0.15s smoothing)
+- Camera mode flip: RMB-orbit -> always-on follow. Offset
+  (5.0m above, 2.2m behind) the player; LookAt the player +0.5m
+  head height. Mouse-look replaces RMB orbit, cursor locked for
+  the session via SDL_SetWindowRelativeMouseMode(true). Scroll
+  zoom may stay as debug
+- Renderer::draw_frame gains a world-transform arg (or pulls
+  from Player). Replaces model = identity in record_command_buffer
+- Roll: 4m root motion finally visible thanks to camera-follow.
+  Player commits position from animator root each frame during
+  Roll so the post-Roll state doesn't snap back
+
+**Files the next instance will need on turn 1:**
+- src/core/Camera.{h,cpp} — refactor from orbit to follow-mode
+- src/core/Window.{h,cpp} — confirm InputFrame has what's needed;
+  may want SDL_EVENT_WINDOW_FOCUS_LOST handling to release cursor
+- src/game/PlayerState.{h,cpp} — owned by new Player class;
+  SM logic unchanged
+- src/render/Renderer.{h,cpp} — draw_frame signature gains a
+  world transform
+- src/main.cpp — loop calls player.update() instead of
+  player_state.update() directly
+
+**Watch for:**
+- Cursor lock: relative mouse mode is currently RMB-gated. Day 11
+  makes it always-on during gameplay. Cmd-Tab away and back
+  should not leave cursor stuck; SDL_EVENT_WINDOW_FOCUS_LOST is
+  the hook (release lock on focus loss, re-acquire on regain)
+- Camera-relative WASD: the Phase 1 "yaw + pi" bug from the HTML
+  prototype lives here too. forward_xz/right_xz are already
+  signed correctly; use them, don't re-derive trig
+- Facing slerp: Mixamo idle and walk face -Z by default. Yaw=0
+  should match. Test strafe (A or D held alone): knight should
+  turn to face strafe direction over ~0.15s
+- Root motion strip: locomotion is strip_root=true (Player owns
+  position). Roll is strip_root=false (root motion is the 4m).
+  During Roll the Player must read animator root EACH FRAME and
+  commit to its own position; otherwise the post-Roll frame
+  snaps back to pre-Roll position
+- inspect_attack_candidates() bloats startup by ~150ms parsing
+  glTFs we don't use. Acceptable for Day 10; remove during Day 11
+  cleanup

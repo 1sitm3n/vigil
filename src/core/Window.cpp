@@ -28,9 +28,13 @@ Window::~Window() {
     SDL_Quit();
 }
 
-void Window::poll_events() {
+void Window::poll_events(const EventCallback& on_event) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
+        // ImGui (or any other observer) gets first dibs on the raw event,
+        // before our switch consumes it.
+        if (on_event) on_event(event);
+
         switch (event.type) {
             case SDL_EVENT_QUIT:
                 should_close_ = true;

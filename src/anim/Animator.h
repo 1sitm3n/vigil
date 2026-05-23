@@ -46,6 +46,7 @@ public:
     void  update(float dt);
     float playback_time() const { return current_time_; }
     bool  is_blending()   const { return target_ != nullptr; }
+    float blend_t()       const { return blend_t_; }  // 0..1 over active crossfade
 
     void compute_bone_palette(glm::mat4* out_palette) const;
 

@@ -51,3 +51,7 @@ devlog.draft.md
 
 # Tripo working folder (kept outside the repo by convention)
 vigil-assets-raw/
+
+# Marketing source clips (large binary; promote to git LFS later if needed)
+marketing/*.mp4
+marketing/*.mov

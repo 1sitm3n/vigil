@@ -35,6 +35,10 @@ struct PlayerInput {
     bool dodge        = false;  // Space pressed THIS frame (edge)
 };
 
+// String labels for debug overlay rendering.
+const char* to_string(PlayerStateId id);
+const char* to_string(AttackPhase   phase);
+
 // Phase 2 player state machine — Idle/Walk/Jog/Attack1-3/Roll.
 //
 // Timing is GDD §6 canonical, not animation duration:
@@ -54,9 +58,10 @@ public:
 
     void update(float dt, const PlayerInput& input);
 
-    PlayerStateId id()           const { return state_; }
-    AttackPhase   attack_phase() const { return phase_; }
-    float         state_time()   const { return state_time_; }
+    PlayerStateId id()              const { return state_; }
+    AttackPhase   attack_phase()    const { return phase_; }
+    float         state_time()      const { return state_time_; }
+    bool          attack_buffered() const { return attack_buffer_; }
 
     // True for the one update() that transitioned. Renderer reads this each
     // frame to trigger Animator::play() with a 0.2s crossfade.

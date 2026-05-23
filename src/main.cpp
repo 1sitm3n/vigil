@@ -1,9 +1,10 @@
 // =============================================================================
-//  Vigil — Day 9
-//  Phase 2: Animation state machine + 0.2s crossfading.
+//  Vigil — Day 10
+//  Phase 2 checkpoint: ImGui debug overlay (state/phase/state_time/anim/FPS/
+//  i-frames dot) + attack-anim audit + 60-second retrospective clip.
+//
 //  W = walk, Shift+W = jog, LMB = attack combo (chains in window),
-//  Space = roll. RMB drag orbits camera, scroll zooms.
-//  WASD camera pan retired — WASD now feeds the player SM exclusively.
+//  Space = roll. RMB drag orbits camera, scroll zooms. Esc quits.
 // =============================================================================
 
 #include "core/Camera.h"
@@ -16,6 +17,10 @@
 
 #include <SDL3/SDL.h>
 
+#include <imgui.h>
+#include <backends/imgui_impl_sdl3.h>
+#include <backends/imgui_impl_vulkan.h>
+
 #include <glm/glm.hpp>
 
 #include <chrono>
@@ -26,7 +31,7 @@
 
 int main(int /*argc*/, char* /*argv*/[]) {
     try {
-        std::printf("================ Vigil — Day 9 ================\n");
+        std::printf("================ Vigil — Day 10 ================\n");
 
         vigil::Window window(1440, 900, "Vigil");
         vigil::VulkanContext vk(window);
@@ -42,17 +47,23 @@ int main(int /*argc*/, char* /*argv*/[]) {
         std::printf("[Vigil] Shader dir: %s\n", shader_dir.string().c_str());
 
         vigil::GraphicsPipeline pipeline(vk, swapchain, vert_path, frag_path);
-        vigil::Renderer    renderer(vk, swapchain, pipeline);
+        vigil::Renderer    renderer(vk, swapchain, pipeline, window);
         vigil::Camera      camera;
         vigil::PlayerState player;
 
         std::printf("[Vigil] W = walk, Shift+W = jog, LMB = attack combo, Space = roll.\n");
         std::printf("[Vigil] Hold RMB + drag to orbit. Scroll to zoom. Esc to quit.\n");
+        std::printf("[Vigil] Debug overlay (ImGui) top-left.\n");
 
         auto last_time = std::chrono::high_resolution_clock::now();
 
         while (!window.should_close()) {
-            window.poll_events();
+            // ImGui gets first dibs on every SDL event so its IO state stays
+            // in sync (mouse, keyboard, text input). Window's own switch
+            // consumes events for game logic afterwards.
+            window.poll_events([](const SDL_Event& e) {
+                ImGui_ImplSDL3_ProcessEvent(&e);
+            });
 
             const auto now = std::chrono::high_resolution_clock::now();
             const float dt = std::chrono::duration<float>(now - last_time).count();
@@ -75,6 +86,14 @@ int main(int /*argc*/, char* /*argv*/[]) {
             pin.attack       = input.lmb_pressed;
             pin.dodge        = input.space_pressed;
             player.update(dt, pin);
+
+            // ImGui frame: NewFrame -> build UI -> Render. RenderDrawData
+            // happens inside renderer.draw_frame's command-buffer recording.
+            ImGui_ImplVulkan_NewFrame();
+            ImGui_ImplSDL3_NewFrame();
+            ImGui::NewFrame();
+            renderer.draw_debug_overlay(player, dt);
+            ImGui::Render();
 
             renderer.draw_frame(camera, player);
         }
