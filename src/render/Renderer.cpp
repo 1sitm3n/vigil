@@ -9,12 +9,19 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <stdexcept>
 #include <vector>
 
 namespace vigil {
+
+namespace {
+constexpr float kCrossfadeDuration  = 0.2f;  // roadmap Day 9: 0.2s blend.
+constexpr float kRollTargetDuration = 0.5f;  // GDD §6: roll lasts 0.5s.
+}  // namespace
 
 Renderer::Renderer(VulkanContext& vk,
                    const Swapchain& swapchain,
@@ -29,7 +36,7 @@ Renderer::Renderer(VulkanContext& vk,
     create_mesh();
     create_texture();
     create_bone_palette_buffers();
-    create_animation();
+    load_animations();
     create_descriptor_pool();
     create_descriptor_sets();
 }
@@ -122,11 +129,41 @@ void Renderer::create_bone_palette_buffers() {
     }
 }
 
-void Renderer::create_animation() {
-    idle_animation_ = load_animation("assets/characters/knight/anims/idle.glb",
-                                     mesh_.skeleton());
+void Renderer::load_animations() {
+    auto load_slot = [&](PlayerStateId id, const char* path,
+                         bool strip_root, float target_duration) {
+        AnimSlot& s = anim_slots_[static_cast<size_t>(id)];
+        s.anim       = load_animation(path, mesh_.skeleton());
+        s.strip_root = strip_root;
+        // Compress/stretch native duration to fit SM budget. <=0 = native.
+        s.speed = (target_duration > 0.0f && s.anim.duration > 0.0f)
+                      ? s.anim.duration / target_duration
+                      : 1.0f;
+        std::printf("[Anim] slot=%d  file=%s  native=%.3fs  speed=%.3fx  strip_root=%d\n",
+                    static_cast<int>(id), path, s.anim.duration, s.speed,
+                    static_cast<int>(strip_root));
+    };
+
+    // GDD-canonical mapping. Locomotion + combat strip root motion (player
+    // class owns position from Day 11). Roll keeps root motion — the 4m
+    // forward distance from GDD §6 lives in the animation, not in code —
+    // and gets its native ~1.27s compressed to the 0.5s spec.
+    load_slot(PlayerStateId::Idle,    "assets/characters/knight/anims/idle.glb",         true,  0.0f);
+    load_slot(PlayerStateId::Walk,    "assets/characters/knight/anims/walk.glb",         true,  0.0f);
+    load_slot(PlayerStateId::Jog,     "assets/characters/knight/anims/run.glb",          true,  0.0f);
+    load_slot(PlayerStateId::Attack1, "assets/characters/knight/anims/slash.glb",        true,  0.0f);
+    load_slot(PlayerStateId::Attack2, "assets/characters/knight/anims/slash_v2.glb",     true,  0.0f);
+    load_slot(PlayerStateId::Attack3, "assets/characters/knight/anims/slash_v3.glb",     true,  0.0f);
+    load_slot(PlayerStateId::Roll,    "assets/characters/knight/anims/roll_forward.glb", false, kRollTargetDuration);
+
     animator_.set_skeleton(mesh_.skeleton());
-    animator_.set_animation(idle_animation_);
+    // Snap-load Idle as the starting pose (no blend on first frame).
+    switch_to(PlayerStateId::Idle, 0.0f);
+}
+
+void Renderer::switch_to(PlayerStateId id, float fade) {
+    const AnimSlot& s = anim_slots_[static_cast<size_t>(id)];
+    animator_.play(s.anim, fade, s.speed, s.strip_root);
 }
 
 void Renderer::create_descriptor_pool() {
@@ -195,7 +232,7 @@ void Renderer::create_descriptor_sets() {
     }
 }
 
-void Renderer::draw_frame(const Camera& camera) {
+void Renderer::draw_frame(const Camera& camera, const PlayerState& player) {
     auto& frame = frames_[current_frame_];
 
     vkWaitForFences(vk_.device(), 1, &frame.in_flight, VK_TRUE, UINT64_MAX);
@@ -211,16 +248,19 @@ void Renderer::draw_frame(const Camera& camera) {
         throw std::runtime_error("vkAcquireNextImageKHR failed");
     }
 
-    // Advance animation, write the new palette into this frame's UBO.
-    // Safe to write because the wait on frame.in_flight above guarantees the
-    // previous draw using this FIF's resources is complete.
+    // SM transitioned this tick? Crossfade to the new slot.
+    if (player.state_changed()) {
+        switch_to(player.id(), kCrossfadeDuration);
+    }
+
+    // Advance animation + write the palette into this frame's UBO.
+    // The wait on frame.in_flight above guarantees the previous draw using
+    // this FIF's resources is complete; safe to overwrite.
     const auto now = std::chrono::high_resolution_clock::now();
     const float dt = std::chrono::duration<float>(now - last_frame_time_).count();
     last_frame_time_ = now;
 
     animator_.update(dt);
-    // Reset palette to identity so unanimated joints (none, for Mixamo, but
-    // defensive) don't carry stale data from a previous frame.
     std::fill(palette_scratch_.begin(), palette_scratch_.end(), glm::mat4(1.0f));
     animator_.compute_bone_palette(palette_scratch_.data());
     bone_palette_buffers_[current_frame_].upload(palette_scratch_.data(),

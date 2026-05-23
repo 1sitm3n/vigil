@@ -488,3 +488,149 @@
   a state machine with timers, not a flat enum
 - The 1m bind-pose / checker texture / backface bleed bugs are carried
   forward — NOT Day 9 work. They have their own fix windows
+
+## Day 9 — 2026-05-23 — Crossfade + player state machine
+
+**Shipped:**
+- src/anim/Animator refactored: current + target Animation pointers,
+  0.2s crossfade with per-channel TRS blend (lerp T/S, slerp R), per-
+  anim playback_speed and strip_root_motion knobs. Old set_animation
+  retained as snap-no-blend wrapper for back-compat. Memoised
+  recursive FK preserved from Day 8
+- src/game/PlayerState.{h,cpp} — PlayerStateId enum (Idle/Walk/Jog/
+  Attack1-3/Roll), AttackPhase enum, PlayerInput struct. FSM owns
+  state_time_, attack_buffer_, state_changed_; transitions emit
+  state_changed_ for one frame so Renderer can trigger crossfade
+- Frame data per GDD §6: light atk 0.30/0.10/0.40, combo window
+  0.50s from recovery start (0.10s grace past recovery end), roll
+  0.50s with i-frames 0.10–0.35s exposed as iframes_active() bool
+- Input buffering: LMB during startup/active is buffered, consumed
+  at recovery start to chain Attack1->Attack2->Attack3. Attack3 is
+  terminal (no chain). Dodge during attack recovery cancels into
+  Roll. Roll cannot be cancelled (per GDD §6)
+- Window: added lmb_pressed / space_pressed edge fields plus
+  shift_held. SDL3 KEY_DOWN gates on !event.key.repeat so the OS
+  key-repeat doesn't queue a stream of rolls. LMB is naturally
+  one-event-per-click (no repeat)
+- Renderer: const PlayerState& draw_frame arg. Owns a 7-slot
+  AnimSlot array indexed by PlayerStateId — slot carries Animation
+  + speed + strip_root. switch_to(id, fade) calls
+  animator_.play(slot.anim, fade, slot.speed, slot.strip_root).
+  Triggered each frame on player.state_changed()
+- WASD camera pan retired from main.cpp. WASD now exclusively
+  feeds the SM. Camera is RMB-orbit + scroll only. Cleaner
+  separation; less to migrate when Day 11 lands the Player class
+  + camera-follow
+- CMakeLists patched to include src/game/PlayerState.cpp
+- All test sequences pass: W/Shift+W locomotion crossfades, LMB
+  combo chain (slash -> slash_v2 -> slash_v3), LMB buffering
+  during startup/active, Space roll, roll-cancel from attack
+  recovery. roll_forward.glb (1.267s native) auto-scaled to
+  2.533x to hit GDD §6 0.5s target
+
+**Broken / pending:**
+- Attack anim durations vs SM phase budgets are mismatched:
+  slash.glb 1.500s / slash_v2.glb 3.500s / slash_v3.glb 1.567s
+  vs the SM's 0.80s attack budget. slash_v2 at 23% completion
+  before transition is visibly cut. slash_v2 also matches idle.glb
+  exactly at 3.500s — possible mis-tagged file in the pack;
+  preview in donmccurdy on Day 10 before deciding to compress
+  (4.4x on slash_v2 looks fast) or swap for attack_v*/slash_v4-5
+- Mid-blend play() restarts from current_ alone, not the live
+  blended pose. 0.2s windows + sane input makes pops rare;
+  visible during chain-spam if a reviewer hammers LMB during
+  the 0.2s window. Snapshot-as-current would fix; deferred
+- Knight drifts 4m forward on roll while camera stays at world
+  origin — visually leaves the frame. Day 11's camera-follow
+  fixes this naturally
+- 1m bind-pose carried from Day 7
+- Checker texture instead of knight diffuse, carried from Day 7
+- Backface bleed on legs, carried from Day 7
+- Stale /usr/local/share/vulkan duplicate-layer warnings carry
+  since Day 1
+
+**Notes for tomorrow:**
+- Day 10: Phase 2 checkpoint = polish + ImGui debug overlay +
+  60-second retrospective clip
+- Vendor Dear ImGui via FetchContent (github.com/ocornut/imgui),
+  vulkan + sdl3 backends. v1.91+ has clean SDL3 support
+- Overlay: current PlayerStateId, AttackPhase, state_time_,
+  attack_buffer_, animator playback_time + is_blending, FPS
+  rolling average, iframes_active dot
+- Inspect attack animations in donmccurdy viewer: preview slash /
+  slash_v2-v5 and attack / attack_v2-v4, pick three for a
+  left-right-finisher arc ~0.8s each (or compress via
+  target_duration in the AnimSlot load). slash_v2 at 3.500s is
+  the obvious first target — likely a mis-tagged or
+  bake-in-recovery clip
+- Animation polish pass: fix any loop jumps, smooth out jittery
+  transitions, confirm walk/jog cycles loop without snap
+- Record 60-second Phase 2 clip cycling Idle -> Walk -> Jog ->
+  Combo -> Roll -> Idle. QuickTime screen record at 60fps
+- Phase 2 GATE: knight runs five animations smoothly, SM handles
+  transitions, ImGui overlay works, FPS holds 60+. If not green,
+  weekend is for fixing
+
+## Handoff to Day 10 instance
+
+**State at end of Day 9:**
+- Phase 2 mechanism complete: skinning (Day 7), sampling (Day 8),
+  crossfade + FSM (Day 9). Knight responds to keyboard across all
+  7 states with 0.2s per-channel TRS blending
+- Renderer takes const PlayerState&. PlayerStateId is the shared
+  contract between game/PlayerState and render/Renderer's
+  AnimSlot array. Adding a new state requires adding a slot
+- Animator's old set_animation(a) is the back-compat snap-no-blend
+  wrapper around play(a, 0, 1, true) — usable as a shortcut
+- Stand-to-Roll's native 1.267s -> 0.5s GDD target pattern via
+  per-anim speed scaling at load is reusable for any anim that
+  needs to fit a custom budget (e.g. attack slots on Day 10)
+- WASD camera pan retired from main.cpp; WASD feeds the SM
+  exclusively. Camera is RMB-orbit + scroll only
+
+**Day 10 work (per roadmap Phase 2 checkpoint):**
+- FetchContent ImGui into third_party, init Vulkan + SDL3 backends
+- ImGui needs its own VkDescriptorPool sized for ImGui_ImplVulkan
+  (combined image samplers, ~1k descriptors is plenty)
+- Refactor Window::poll_events to give ImGui first dibs on SDL
+  events: easiest path is an event-callback parameter, e.g.
+  window.poll_events([](const SDL_Event& e){
+      ImGui_ImplSDL3_ProcessEvent(&e); })
+- Per-frame: ImGui_ImplVulkan_NewFrame, ImGui_ImplSDL3_NewFrame,
+  ImGui::NewFrame, immediate-mode draws, ImGui::Render,
+  ImGui_ImplVulkan_RenderDrawData in record_command_buffer
+  AFTER the main mesh draw and BEFORE vkCmdEndRenderPass
+- Debug window contents per "Notes for tomorrow"
+- Fix attack-anim mismatch: preview, swap or compress to ~0.8s each
+- Record the 60-sec clip
+
+**Files the next instance will need on turn 1:**
+- src/anim/Animator.{h,cpp} — current shape, in case ImGui
+  surface needs to query is_blending or playback_time
+- src/game/PlayerState.{h,cpp} — overlay reads id/phase/state_time
+- src/render/Renderer.{h,cpp} — the ImGui integration point
+- src/core/Window.{h,cpp} — event-callback refactor lands here
+- src/main.cpp — overall loop, where ImGui::NewFrame/EndFrame
+  bookend each tick
+- CMakeLists.txt — FetchContent block for ImGui + new sources
+
+**Watch for:**
+- ImGui Vulkan backend wants its own descriptor pool, separate
+  from Renderer's main pool. Don't try to share
+- ImGui_ImplSDL3_ProcessEvent must see events BEFORE the Window
+  switch consumes them, or text input + capture-want flags
+  won't work. Refactor poll_events to a callback, or process
+  events from main.cpp directly
+- ImGui draws should always run at timeScale=1.0; don't apply
+  Phase 3+ hitstop/parry slow-mo to the overlay
+- slash_v2.glb at 3.500s native (identical to idle.glb at 3.500s)
+  may be a mis-tagged file in the Mixamo pack — preview before
+  trusting. attack_v* / slash_v4-5 are fallback candidates from
+  the on-disk pack
+- Compressing >4x via playback_speed produces visibly snappy
+  joints; better to find a shorter source clip than to over-
+  compress
+- 1m bind-pose carried bug — fix in Blender re-upload before
+  Week 4 so Cultist/Wraith/Sovereign don't all come out short
+- Mid-blend play() restart-from-current pop is mostly invisible
+  but worth a snapshot-as-current fix if reviewers hammer input

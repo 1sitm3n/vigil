@@ -1,12 +1,15 @@
 // =============================================================================
-//  Vigil — Day 5
-//  Orbit camera (RMB drag), zoom (scroll), WASD target pan.
-//  Phase 1 checkpoint: textured cat tumbles, camera flies around it.
+//  Vigil — Day 9
+//  Phase 2: Animation state machine + 0.2s crossfading.
+//  W = walk, Shift+W = jog, LMB = attack combo (chains in window),
+//  Space = roll. RMB drag orbits camera, scroll zooms.
+//  WASD camera pan retired — WASD now feeds the player SM exclusively.
 // =============================================================================
 
 #include "core/Camera.h"
 #include "core/Window.h"
 #include "core/VulkanContext.h"
+#include "game/PlayerState.h"
 #include "render/Swapchain.h"
 #include "render/GraphicsPipeline.h"
 #include "render/Renderer.h"
@@ -23,7 +26,7 @@
 
 int main(int /*argc*/, char* /*argv*/[]) {
     try {
-        std::printf("================ Vigil — Day 5 ================\n");
+        std::printf("================ Vigil — Day 9 ================\n");
 
         vigil::Window window(1440, 900, "Vigil");
         vigil::VulkanContext vk(window);
@@ -39,11 +42,12 @@ int main(int /*argc*/, char* /*argv*/[]) {
         std::printf("[Vigil] Shader dir: %s\n", shader_dir.string().c_str());
 
         vigil::GraphicsPipeline pipeline(vk, swapchain, vert_path, frag_path);
-        vigil::Renderer renderer(vk, swapchain, pipeline);
-        vigil::Camera   camera;
+        vigil::Renderer    renderer(vk, swapchain, pipeline);
+        vigil::Camera      camera;
+        vigil::PlayerState player;
 
-        std::printf("[Vigil] Hold RMB + drag to orbit. Scroll to zoom. WASD to pan.\n");
-        std::printf("[Vigil] Close window or press Esc to quit.\n");
+        std::printf("[Vigil] W = walk, Shift+W = jog, LMB = attack combo, Space = roll.\n");
+        std::printf("[Vigil] Hold RMB + drag to orbit. Scroll to zoom. Esc to quit.\n");
 
         auto last_time = std::chrono::high_resolution_clock::now();
 
@@ -56,6 +60,7 @@ int main(int /*argc*/, char* /*argv*/[]) {
 
             const auto input = window.consume_input();
 
+            // Camera: RMB orbit + scroll zoom only. WASD pan retired.
             if (input.rmb_held && (input.mouse_dx != 0.0f || input.mouse_dy != 0.0f)) {
                 camera.orbit(input.mouse_dx, input.mouse_dy);
             }
@@ -63,18 +68,15 @@ int main(int /*argc*/, char* /*argv*/[]) {
                 camera.zoom(input.scroll_y);
             }
 
-            glm::vec3 pan_dir(0.0f);
-            if (input.w_held) pan_dir -= camera.forward_xz();
-            if (input.s_held) pan_dir += camera.forward_xz();
-            if (input.d_held) pan_dir -= camera.right_xz();
-            if (input.a_held) pan_dir += camera.right_xz();
+            // Player state machine — frame data per GDD §6.
+            vigil::PlayerInput pin;
+            pin.move_forward = input.w_held;
+            pin.sprint       = input.shift_held;
+            pin.attack       = input.lmb_pressed;
+            pin.dodge        = input.space_pressed;
+            player.update(dt, pin);
 
-            if (glm::length(pan_dir) > 0.0001f) {
-                pan_dir = glm::normalize(pan_dir);
-                camera.pan_target(pan_dir * camera.pan_speed * dt);
-            }
-
-            renderer.draw_frame(camera);
+            renderer.draw_frame(camera, player);
         }
 
         renderer.wait_idle();

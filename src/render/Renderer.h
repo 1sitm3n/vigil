@@ -2,6 +2,7 @@
 
 #include "anim/Animation.h"
 #include "anim/Animator.h"
+#include "game/PlayerState.h"
 #include "render/Buffer.h"
 #include "render/Mesh.h"
 #include "render/Texture.h"
@@ -35,7 +36,7 @@ public:
     Renderer(Renderer&&) = delete;
     Renderer& operator=(Renderer&&) = delete;
 
-    void draw_frame(const Camera& camera);
+    void draw_frame(const Camera& camera, const PlayerState& player);
     void wait_idle();
 
 private:
@@ -45,17 +46,27 @@ private:
         VkFence         in_flight       = VK_NULL_HANDLE;
     };
 
+    // One Animation + its playback knobs per PlayerStateId. anim_slots_ is
+    // indexed by static_cast<size_t>(PlayerStateId::X). PlayerStateId is the
+    // contract between SM and Renderer — adding a state means adding a slot.
+    struct AnimSlot {
+        Animation anim;
+        float     speed      = 1.0f;
+        bool      strip_root = true;
+    };
+
     void create_command_pool();
     void create_command_buffers();
     void create_sync_objects();
     void create_mesh();
     void create_texture();
     void create_bone_palette_buffers();
-    void create_animation();
+    void load_animations();
     void create_descriptor_pool();
     void create_descriptor_sets();
     void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
                                const Camera& camera);
+    void switch_to(PlayerStateId id, float fade);
 
     VulkanContext&          vk_;
     const Swapchain&        swapchain_;
@@ -66,13 +77,13 @@ private:
     std::vector<VkSemaphore>                render_finished_;
     uint32_t                                current_frame_ = 0;
 
-    Mesh                                    mesh_;
+    Mesh                                          mesh_;
     Texture                                       diffuse_texture_;
     std::array<Buffer, FRAMES_IN_FLIGHT>          bone_palette_buffers_{};
     VkDescriptorPool                              descriptor_pool_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, FRAMES_IN_FLIGHT> descriptor_sets_{};
 
-    Animation                                     idle_animation_;
+    std::array<AnimSlot, static_cast<size_t>(PlayerStateId::Count)> anim_slots_;
     Animator                                      animator_;
     std::vector<glm::mat4>                        palette_scratch_;
 

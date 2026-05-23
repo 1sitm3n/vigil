@@ -37,7 +37,14 @@ void Window::poll_events() {
                 break;
 
             case SDL_EVENT_KEY_DOWN:
-                if (event.key.key == SDLK_ESCAPE) should_close_ = true;
+                // SDL3 fires KEY_DOWN once on initial press, then again at the
+                // OS repeat rate with .repeat = true. Edge triggers reject the
+                // repeats so Space doesn't queue a stream of rolls.
+                if (event.key.key == SDLK_ESCAPE) {
+                    should_close_ = true;
+                } else if (event.key.key == SDLK_SPACE && !event.key.repeat) {
+                    pending_space_press_ = true;
+                }
                 break;
 
             case SDL_EVENT_WINDOW_RESIZED:
@@ -49,6 +56,8 @@ void Window::poll_events() {
                 if (event.button.button == SDL_BUTTON_RIGHT) {
                     rmb_down_ = true;
                     SDL_SetWindowRelativeMouseMode(window_, true);
+                } else if (event.button.button == SDL_BUTTON_LEFT) {
+                    pending_lmb_press_ = true;
                 }
                 break;
 
@@ -78,20 +87,25 @@ void Window::poll_events() {
 
 InputFrame Window::consume_input() {
     InputFrame frame;
-    frame.mouse_dx = pending_mouse_dx_;
-    frame.mouse_dy = pending_mouse_dy_;
-    frame.scroll_y = pending_scroll_y_;
-    frame.rmb_held = rmb_down_;
+    frame.mouse_dx      = pending_mouse_dx_;
+    frame.mouse_dy      = pending_mouse_dy_;
+    frame.scroll_y      = pending_scroll_y_;
+    frame.rmb_held      = rmb_down_;
+    frame.lmb_pressed   = pending_lmb_press_;
+    frame.space_pressed = pending_space_press_;
 
-    pending_mouse_dx_ = 0.0f;
-    pending_mouse_dy_ = 0.0f;
-    pending_scroll_y_ = 0.0f;
+    pending_mouse_dx_    = 0.0f;
+    pending_mouse_dy_    = 0.0f;
+    pending_scroll_y_    = 0.0f;
+    pending_lmb_press_   = false;
+    pending_space_press_ = false;
 
     const bool* keys = SDL_GetKeyboardState(nullptr);
-    frame.w_held = keys[SDL_SCANCODE_W];
-    frame.a_held = keys[SDL_SCANCODE_A];
-    frame.s_held = keys[SDL_SCANCODE_S];
-    frame.d_held = keys[SDL_SCANCODE_D];
+    frame.w_held     = keys[SDL_SCANCODE_W];
+    frame.a_held     = keys[SDL_SCANCODE_A];
+    frame.s_held     = keys[SDL_SCANCODE_S];
+    frame.d_held     = keys[SDL_SCANCODE_D];
+    frame.shift_held = keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
 
     return frame;
 }
