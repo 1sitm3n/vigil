@@ -815,3 +815,143 @@
 - inspect_attack_candidates() bloats startup by ~150ms parsing
   glTFs we don't use. Acceptable for Day 10; remove during Day 11
   cleanup
+
+## Day 11 — 2026-05-24 — Player class + follow camera + Phase 3 opens
+
+**Shipped:**
+- src/game/Player.{h,cpp}: position vec3, velocity vec3, yaw_facing
+  float, owns PlayerState (ownership migrated up from main.cpp).
+  update(dt, InputFrame, Camera) drives the SM, camera-relative
+  locomotion, Roll code-motion, and facing slerp
+- Walk 3.0 m/s, sprint 6.0 m/s per GDD §6. Sprint intent forwarded
+  to PlayerInput but no stamina drain yet (Day 13)
+- Roll 8.0 m/s × 0.5s = 4m in latched direction. Direction = wish_dir
+  at roll entry if held, else current facing. GDD v1.3 §6 #11
+  forward-only constraint satisfied — Mixamo only ships
+  sword-and-shield forward-roll for this skeleton
+- Roll design call (deviated from Day 10 handoff): Roll AnimSlot
+  flipped to strip_root=true; the 4m is code-driven via velocity
+  integration, same path as Walk/Jog. Snap-back on Roll exit gone
+  by construction (palette carries no translation)
+- src/core/Camera retargeted to follow mode. Defaults: yaw=0,
+  pitch=20°, distance=4.0m, FoV=55°, sensitivity=0.0025 rad/px.
+  min_pitch raised to -5° so camera never inverts. target_ pinned
+  to player.pos + (0, 0.5, 0) each frame in main.cpp
+- src/core/Window: SDL_SetWindowRelativeMouseMode on at construction
+  for the whole session, RMB gate dropped. SDL_EVENT_WINDOW_FOCUS_
+  LOST/GAINED release+regain so Cmd-Tab doesn't strand the cursor
+- src/render/Renderer: draw_frame + draw_debug_overlay take
+  const Player&. record_command_buffer takes world_transform arg;
+  replaces the identity matrix in MVP. The Day-10 param rename to
+  'p' collided with the local 'const ImVec2 p' for the i-frames dot
+  — landed on 'player_obj' to dodge
+- Overlay extended with pos / |vel| / yaw under the i-frames dot
+
+**WASD convention — ended at the non-textbook version:**
+- W -= fwd, S += fwd, D -= right, A += right. Camera-relative
+  original was the inverse; user reported it reversed on first run
+  so the signs got flipped and stayed
+- Tried Skyrim-style (body tracks camera.yaw, no rotation on strafe)
+  as a deeper-hypothesis fix; user preferred the simpler sign flip
+- Likely explanation: Tripo→Mixamo knight may face +Z by default
+  (toward camera) rather than -Z. Day-10 handoff asserted -Z but
+  was untested because Day 9-10 didn't visibly move the knight.
+  With a +Z-facing model, the textbook convention reads as
+  "reversed." Diagnose for real when the Week-4 Blender re-upload
+  gives us a textured knight with unambiguous face/back
+
+**Broken / pending:**
+- 1m bind-pose, checker texture, backface bleed — Day 7 carry,
+  Week 4 Blender re-upload
+- Mid-blend pose-pop on chain-spam — Day 9 carry, deferred
+- inspect_attack_candidates() still called in Renderer ctor,
+  ~150ms startup. Remove after Day-13 attack work settles
+- Stale /usr/local/share/vulkan dup-layer warnings, Day 1 carry
+- WASD sign convention deviates from third-person standard;
+  diagnose model facing direction in Week 4
+- Body rotation still tied to wish_dir (rotates knight to face
+  strafe direction). User chose this over camera-yaw-tracking.
+  Reconsider when locomotion blend-tree + strafe anims land
+
+**Day 11 deliverable per roadmap: GREEN.**
+- Knight moves around a flat plane with WASD + mouse-look
+- Idle ↔ Walk ↔ Jog crossfades clean
+- Attack combo unchanged from Day 10
+- Roll 4m reads on-screen, camera follows, no snap-back
+- Cmd-Tab away and back recovers cursor
+
+**Notes for tomorrow:**
+- Day 12 per roadmap: light attack + combo system + practice dummy
+  + console hit detection
+- Combo SM + animations already done (Day 9 + Day 10). Remaining
+  work: place a static practice dummy, write cone-overlap hit test
+  during Attack1/2/3 active frames, print "HIT" once per landing
+- Dummy mesh: procedural unit cube OR a single-cube .glb. Skinned
+  shader expects a bone palette UBO — non-skinned dummy needs
+  either a fake identity palette (cheapest), a shader branch, or
+  a second pipeline. Day 12 picks the fast path
+- Hit detection: 90° cone (45° half-angle) centered on Player::yaw(),
+  2.0m reach (GDD §6), XZ only. One-shot per attack via a
+  has_landed_ flag on PlayerState reset on transition_to()
+- Cone direction may need a sign correction matching the WASD flip
+  — if hits register on the wrong side of the knight, flip the
+  cone-center vector and log it
+
+## Handoff to Day 12 instance
+
+**State at end of Day 11:**
+- Player class owns position, velocity, yaw_facing_, and the SM.
+  main.cpp holds Player; Renderer extracts player.state() and
+  player.world_transform()
+- Follow camera at offset derived from yaw/pitch/distance.
+  Defaults: yaw 0, pitch 20°, distance 4.0m, FoV 55°,
+  sensitivity 0.0025 rad/px. target = player.position + (0,0.5,0)
+- Mouse-look on for the entire session, cursor releases on
+  focus loss / regains on focus gain
+- WASD: W -= fwd, S += fwd, D -= right, A += right. Departed
+  from camera-relative-original — see Day 11 entry for context
+- Roll: 8 m/s × 0.5s code-driven, AnimSlot strip_root=true
+- Day-9 attack SM intact: 3-hit combo with 0.30/0.10/0.40 phase
+  data, input buffering, dodge-cancel from recovery
+- Overlay shows pos / |vel| / yaw under the i-frames dot
+
+**Day 12 work (per roadmap Phase 3):**
+- Place stationary practice dummy in the world, e.g. at (3, 0, -2).
+  Procedural unit cube in Mesh OR a tiny one-mesh .glb. Skinned
+  pipeline expects bone palette — cheapest path is to bind an
+  identity palette per dummy draw and reuse the existing pipeline
+- Hit detection during Attack1/2/3 with AttackPhase::Active:
+  90° cone, 45° half-angle, centered on Player::yaw(), 2.0m reach,
+  XZ only. On first hit per attack instance print "[HIT]" and set
+  a has_landed_ flag on PlayerState; reset on transition_to() into
+  an attack state. 0.10s active × 60Hz = 6 frames, must fire once
+- Console output is sufficient for Day 12. Visual hit reaction
+  (white flash, damage number, hitstop) is Phase 6
+
+**Files the next instance will need on turn 1:**
+- src/render/Renderer.{h,cpp} — add second draw call for the dummy
+- src/render/Mesh.{h,cpp} — existing load_from_glb surface; may
+  want load_unit_cube() helper
+- src/game/Player.{h,cpp} — yaw() accessor for cone direction
+- src/game/PlayerState.{h,cpp} — has_landed_ flag + reset hook
+- src/main.cpp — instantiate the dummy + drive hit detection
+
+**Watch for:**
+- One-shot per attack: 6 active frames at 60Hz. Store has_landed_
+  on PlayerState, reset only on attack-state entry
+- Cone direction sign: if hits register on the wrong side of the
+  knight, the same +Z-facing-model hypothesis from Day 11 needs a
+  flip. Log angle(knight_facing, dummy_vector) during bring-up
+- Non-skinned dummy: identity bone palette is the smallest diff;
+  clean alternative is a second pipeline + non-skinned vertex
+  shader. Pick the fast one for Day 12
+- Don't get pulled into: model-facing diagnosis (Week 4 work),
+  strafe anims (Phase 4+), heavy attack (Day 13), Renderer's
+  inspect_attack_candidates() cleanup
+
+**Phase 3 plan reminder:**
+- Day 12: practice dummy + hit detection (combo system done Day 9)
+- Day 13: heavy attack + block + stamina drain
+- Day 14: parry + riposte (i-frames already exposed via
+  PlayerState::iframes_active())
+- Day 15: holy bolt + faith resource + Phase 3 checkpoint

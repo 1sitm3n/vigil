@@ -2,7 +2,7 @@
 
 #include "anim/Animation.h"
 #include "anim/Animator.h"
-#include "game/PlayerState.h"
+#include "game/Player.h"
 #include "render/Buffer.h"
 #include "render/Mesh.h"
 #include "render/Texture.h"
@@ -38,10 +38,11 @@ public:
     Renderer(Renderer&&) = delete;
     Renderer& operator=(Renderer&&) = delete;
 
-    // main.cpp calls this between ImGui::NewFrame and ImGui::Render so the
-    // overlay's draw data is finalised by the time we record commands.
-    void draw_debug_overlay(const PlayerState& player, float dt);
-    void draw_frame(const Camera& camera, const PlayerState& player);
+    // Day 11: draw_debug_overlay and draw_frame now take the Player wrapper
+    // (which owns PlayerState, position, velocity, facing). Renderer extracts
+    // player.state() for SM/animator and player.world_transform() for MVP.
+    void draw_debug_overlay(const Player& player, float dt);
+    void draw_frame(const Camera& camera, const Player& player);
     void wait_idle();
 
 private:
@@ -51,9 +52,6 @@ private:
         VkFence         in_flight       = VK_NULL_HANDLE;
     };
 
-    // One Animation + its playback knobs per PlayerStateId. anim_slots_ is
-    // indexed by static_cast<size_t>(PlayerStateId::X). PlayerStateId is the
-    // contract between SM and Renderer — adding a state means adding a slot.
     struct AnimSlot {
         Animation anim;
         float     speed      = 1.0f;
@@ -73,7 +71,8 @@ private:
     void init_imgui();
     void shutdown_imgui();
     void record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
-                               const Camera& camera);
+                               const Camera& camera,
+                               const glm::mat4& world_transform);
     void switch_to(PlayerStateId id, float fade);
 
     VulkanContext&          vk_;
@@ -92,8 +91,6 @@ private:
     VkDescriptorPool                              descriptor_pool_ = VK_NULL_HANDLE;
     std::array<VkDescriptorSet, FRAMES_IN_FLIGHT> descriptor_sets_{};
 
-    // Separate descriptor pool for ImGui — it allocates its own font texture
-    // descriptor + any user-bound textures. Don't share with the main pool.
     VkDescriptorPool imgui_descriptor_pool_ = VK_NULL_HANDLE;
     bool             imgui_ready_           = false;
 
@@ -101,7 +98,6 @@ private:
     Animator                                      animator_;
     std::vector<glm::mat4>                        palette_scratch_;
 
-    // FPS rolling average for the overlay.
     static constexpr size_t FPS_WINDOW = 60;
     std::array<float, FPS_WINDOW> fps_window_{};
     size_t fps_cursor_ = 0;

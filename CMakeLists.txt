@@ -116,6 +116,7 @@ add_executable(vigil
     src/anim/Animation.cpp
     src/anim/Animator.cpp
     src/game/PlayerState.cpp
+    src/game/Player.cpp
     third_party/stb/stb_image_impl.cpp
     third_party/cgltf/cgltf_impl.cpp
     ${IMGUI_SOURCES}

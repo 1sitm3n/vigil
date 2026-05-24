@@ -5,6 +5,7 @@
 #include "core/VulkanContext.h"
 #include "core/Camera.h"
 #include "core/Window.h"
+#include "game/Player.h"
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
@@ -172,7 +173,7 @@ void Renderer::load_animations() {
     load_slot(PlayerStateId::Attack1, "assets/characters/knight/anims/slash.glb",        true,  kAtkTargetDuration);
     load_slot(PlayerStateId::Attack2, "assets/characters/knight/anims/slash_v5.glb",     true,  kAtkTargetDuration);
     load_slot(PlayerStateId::Attack3, "assets/characters/knight/anims/slash_v3.glb",     true,  kAtkTargetDuration);
-    load_slot(PlayerStateId::Roll,    "assets/characters/knight/anims/roll_forward.glb", false, kRollTargetDuration);
+    load_slot(PlayerStateId::Roll,    "assets/characters/knight/anims/roll_forward.glb", true,  kRollTargetDuration);
 
     animator_.set_skeleton(mesh_.skeleton());
     // Snap-load Idle as the starting pose (no blend on first frame).
@@ -342,7 +343,8 @@ void Renderer::shutdown_imgui() {
     imgui_ready_ = false;
 }
 
-void Renderer::draw_debug_overlay(const PlayerState& player, float dt) {
+void Renderer::draw_debug_overlay(const Player& player_obj, float dt) {
+    const PlayerState& player = player_obj.state();
     if (!imgui_ready_) return;
 
     // FPS rolling window.
@@ -383,6 +385,12 @@ void Renderer::draw_debug_overlay(const PlayerState& player, float dt) {
     ImGui::Dummy(ImVec2(r * 2.0f + 6.0f, ImGui::GetFontSize()));
 
     ImGui::Separator();
+    const glm::vec3 pp = player_obj.position();
+    const glm::vec3 pv = player_obj.velocity();
+    ImGui::Text("pos   %+6.2f %+6.2f %+6.2f", pp.x, pp.y, pp.z);
+    ImGui::Text("|vel|  %5.2f m/s", glm::length(pv));
+    ImGui::Text("yaw    %+6.1f deg", glm::degrees(player_obj.yaw()));
+    ImGui::Separator();
     ImGui::Text("anim.t       %.3f s", animator_.playback_time());
     ImGui::Text("blending     %s", animator_.is_blending() ? "yes" : "no");
     if (animator_.is_blending()) {
@@ -393,7 +401,7 @@ void Renderer::draw_debug_overlay(const PlayerState& player, float dt) {
     ImGui::End();
 }
 
-void Renderer::draw_frame(const Camera& camera, const PlayerState& player) {
+void Renderer::draw_frame(const Camera& camera, const Player& player) {
     auto& frame = frames_[current_frame_];
 
     vkWaitForFences(vk_.device(), 1, &frame.in_flight, VK_TRUE, UINT64_MAX);
@@ -410,8 +418,8 @@ void Renderer::draw_frame(const Camera& camera, const PlayerState& player) {
     }
 
     // SM transitioned this tick? Crossfade to the new slot.
-    if (player.state_changed()) {
-        switch_to(player.id(), kCrossfadeDuration);
+    if (player.state().state_changed()) {
+        switch_to(player.state().id(), kCrossfadeDuration);
     }
 
     // Advance animation + write the palette into this frame's UBO.
@@ -429,7 +437,7 @@ void Renderer::draw_frame(const Camera& camera, const PlayerState& player) {
 
     vkResetFences(vk_.device(), 1, &frame.in_flight);
     vkResetCommandBuffer(frame.command_buffer, 0);
-    record_command_buffer(frame.command_buffer, image_index, camera);
+    record_command_buffer(frame.command_buffer, image_index, camera, player.world_transform());
 
     const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 
@@ -467,7 +475,8 @@ void Renderer::draw_frame(const Camera& camera, const PlayerState& player) {
 }
 
 void Renderer::record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
-                                     const Camera& camera) {
+                                     const Camera& camera,
+                                     const glm::mat4& world_transform) {
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     if (vkBeginCommandBuffer(cmd, &begin) != VK_SUCCESS) {
@@ -510,9 +519,10 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
     scissor.extent = ext;
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    // Animator drives all motion now; the model matrix is plain identity.
-    // Per glTF spec, the mesh node's transform is ignored for skinned meshes.
-    glm::mat4 model = glm::mat4(1.0f);
+    // Day 11: Player owns position + facing. world_transform is T(pos) *
+    // Ry(yaw); the per-bone palette still rides on top of this in the
+    // vertex shader. Locomotion + Roll integration both pass through here.
+    glm::mat4 model = world_transform;
     const float aspect = static_cast<float>(ext.width) / static_cast<float>(ext.height);
     glm::mat4 mvp = camera.projection(aspect) * camera.view() * model;
 

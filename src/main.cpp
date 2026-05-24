@@ -1,16 +1,19 @@
 // =============================================================================
-//  Vigil — Day 10
-//  Phase 2 checkpoint: ImGui debug overlay (state/phase/state_time/anim/FPS/
-//  i-frames dot) + attack-anim audit + 60-second retrospective clip.
+//  Vigil — Day 11
+//  Phase 3 opens: Player class owns position, facing, velocity, and the SM.
+//  Third-person follow camera at offset (5.5m, pitch 25°) around the player's
+//  head-height pivot. Mouse-look is unconditional (no RMB gate); cursor is
+//  captured for the session via SDL_SetWindowRelativeMouseMode.
 //
-//  W = walk, Shift+W = jog, LMB = attack combo (chains in window),
-//  Space = roll. RMB drag orbits camera, scroll zooms. Esc quits.
+//  WASD = camera-relative locomotion (any direction). Shift = sprint (intent
+//  tracked, drain lands Day 13). LMB = attack combo. Space = roll. Esc quits.
+//  Scroll wheel zooms in/out for camera feel-tuning.
 // =============================================================================
 
 #include "core/Camera.h"
 #include "core/Window.h"
 #include "core/VulkanContext.h"
-#include "game/PlayerState.h"
+#include "game/Player.h"
 #include "render/Swapchain.h"
 #include "render/GraphicsPipeline.h"
 #include "render/Renderer.h"
@@ -31,7 +34,7 @@
 
 int main(int /*argc*/, char* /*argv*/[]) {
     try {
-        std::printf("================ Vigil — Day 10 ================\n");
+        std::printf("================ Vigil — Day 11 ================\n");
 
         vigil::Window window(1440, 900, "Vigil");
         vigil::VulkanContext vk(window);
@@ -47,20 +50,20 @@ int main(int /*argc*/, char* /*argv*/[]) {
         std::printf("[Vigil] Shader dir: %s\n", shader_dir.string().c_str());
 
         vigil::GraphicsPipeline pipeline(vk, swapchain, vert_path, frag_path);
-        vigil::Renderer    renderer(vk, swapchain, pipeline, window);
-        vigil::Camera      camera;
-        vigil::PlayerState player;
+        vigil::Renderer renderer(vk, swapchain, pipeline, window);
+        vigil::Camera   camera;
+        vigil::Player   player;
 
-        std::printf("[Vigil] W = walk, Shift+W = jog, LMB = attack combo, Space = roll.\n");
-        std::printf("[Vigil] Hold RMB + drag to orbit. Scroll to zoom. Esc to quit.\n");
-        std::printf("[Vigil] Debug overlay (ImGui) top-left.\n");
+        std::printf("[Vigil] WASD = move (camera-relative), Shift = sprint.\n");
+        std::printf("[Vigil] LMB = attack combo, Space = roll.\n");
+        std::printf("[Vigil] Mouse-look is always on. Scroll wheel = zoom. Esc to quit.\n");
 
         auto last_time = std::chrono::high_resolution_clock::now();
 
         while (!window.should_close()) {
             // ImGui gets first dibs on every SDL event so its IO state stays
-            // in sync (mouse, keyboard, text input). Window's own switch
-            // consumes events for game logic afterwards.
+            // in sync. Window's own switch consumes events for game logic
+            // afterwards.
             window.poll_events([](const SDL_Event& e) {
                 ImGui_ImplSDL3_ProcessEvent(&e);
             });
@@ -71,21 +74,22 @@ int main(int /*argc*/, char* /*argv*/[]) {
 
             const auto input = window.consume_input();
 
-            // Camera: RMB orbit + scroll zoom only. WASD pan retired.
-            if (input.rmb_held && (input.mouse_dx != 0.0f || input.mouse_dy != 0.0f)) {
+            // Camera follow + mouse-look. Order: (a) re-pin pivot to the
+            // player's head BEFORE consuming mouse delta — keeps yaw/pitch
+            // updates relative to the current pivot, not lagged-by-one-frame.
+            // (b) Mouse-look unconditional now (no RMB gate). (c) Scroll
+            // zoom kept as camera-distance feel-tuner.
+            camera.set_target(player.position() + glm::vec3(0.0f, 0.5f, 0.0f));
+            if (input.mouse_dx != 0.0f || input.mouse_dy != 0.0f) {
                 camera.orbit(input.mouse_dx, input.mouse_dy);
             }
             if (input.scroll_y != 0.0f) {
                 camera.zoom(input.scroll_y);
             }
 
-            // Player state machine — frame data per GDD §6.
-            vigil::PlayerInput pin;
-            pin.move_forward = input.w_held;
-            pin.sprint       = input.shift_held;
-            pin.attack       = input.lmb_pressed;
-            pin.dodge        = input.space_pressed;
-            player.update(dt, pin);
+            // Player owns the SM now. update() drives transitions, locomotion,
+            // Roll motion, and facing-slerp using the camera's basis.
+            player.update(dt, input, camera);
 
             // ImGui frame: NewFrame -> build UI -> Render. RenderDrawData
             // happens inside renderer.draw_frame's command-buffer recording.

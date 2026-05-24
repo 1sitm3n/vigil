@@ -10,28 +10,30 @@
 namespace vigil {
 
 struct InputFrame {
-    // Camera
-    float mouse_dx = 0.0f;         // accumulated relative motion while RMB held
+    // Camera — Day 11: relative-mouse mode is on for the session; motion is
+    // accumulated unconditionally (no longer RMB-gated). rmb_held is still
+    // tracked for informational use; not consumed by Player or Camera.
+    float mouse_dx = 0.0f;
     float mouse_dy = 0.0f;
-    float scroll_y = 0.0f;         // accumulated wheel ticks
+    float scroll_y = 0.0f;
     bool  rmb_held = false;
 
-    // Movement (held this frame)
+    // Movement (held this frame). Player::update treats any of WASD as
+    // locomotion input; Camera basis rotates them into world space.
     bool  w_held     = false;
     bool  a_held     = false;
     bool  s_held     = false;
     bool  d_held     = false;
     bool  shift_held = false;
 
-    // Combat (edge-triggered — true for one frame on press)
+    // Combat (edge-triggered — true for one frame on press).
     bool  lmb_pressed   = false;
     bool  space_pressed = false;
 };
 
-// Day-10 refactor: poll_events takes an optional per-event callback so the
-// ImGui SDL3 backend can see raw SDL_Event payloads BEFORE Window's own
-// switch consumes them. ImGui needs every event (keyboard, mouse, text) to
-// keep its IO state correct, so the callback fires first in the loop.
+// Day-10 refactor (kept): poll_events takes an optional per-event callback
+// so ImGui's SDL3 backend sees raw events BEFORE Window's switch consumes
+// them. ImGui needs every event (keyboard, mouse, text) for IO state.
 using EventCallback = std::function<void(const SDL_Event&)>;
 
 class Window {
