@@ -29,6 +29,7 @@ namespace {
 constexpr float kCrossfadeDuration  = 0.2f;  // roadmap Day 9: 0.2s blend.
 constexpr float kRollTargetDuration = 0.5f;  // GDD §6: roll lasts 0.5s.
 constexpr float kAtkTargetDuration  = 0.8f;  // GDD §6: light atk 0.30+0.10+0.40s.
+constexpr float kHeavyTargetDuration = 1.4f; // GDD §6: heavy atk 0.55+0.15+0.70s.
 }  // namespace
 
 Renderer::Renderer(VulkanContext& vk,
@@ -47,7 +48,6 @@ Renderer::Renderer(VulkanContext& vk,
     create_texture();
     create_bone_palette_buffers();
     load_animations();
-    inspect_attack_candidates();
     create_descriptor_pool();
     create_descriptor_sets();
     init_imgui();
@@ -175,39 +175,12 @@ void Renderer::load_animations() {
     load_slot(PlayerStateId::Attack2, "assets/characters/knight/anims/slash_v5.glb",     true,  kAtkTargetDuration);
     load_slot(PlayerStateId::Attack3, "assets/characters/knight/anims/slash_v3.glb",     true,  kAtkTargetDuration);
     load_slot(PlayerStateId::Roll,    "assets/characters/knight/anims/roll_forward.glb", true,  kRollTargetDuration);
+    load_slot(PlayerStateId::Heavy,   "assets/characters/knight/anims/attack_v3.glb",    true,  kHeavyTargetDuration);
+    load_slot(PlayerStateId::Block,   "assets/characters/knight/anims/block_idle.glb",   true,  0.0f);
 
     animator_.set_skeleton(mesh_.skeleton());
     // Snap-load Idle as the starting pose (no blend on first frame).
     switch_to(PlayerStateId::Idle, 0.0f);
-}
-
-void Renderer::inspect_attack_candidates() {
-    // Day 10 audit: load every plausible attack source clip so the console
-    // shows native durations side-by-side. Pick three with native ~1.0–1.5s
-    // (so the compression-to-0.8s ratio stays under 2x — Day 9 notes flag
-    // >4x as visibly jittery). Remove this call once the combo set is
-    // locked.
-    static const char* const candidates[] = {
-        "assets/characters/knight/anims/slash.glb",
-        "assets/characters/knight/anims/slash_v5.glb",
-        "assets/characters/knight/anims/slash_v3.glb",
-        "assets/characters/knight/anims/slash_v4.glb",
-        "assets/characters/knight/anims/slash_v5.glb",
-        "assets/characters/knight/anims/attack.glb",
-        "assets/characters/knight/anims/attack_v2.glb",
-        "assets/characters/knight/anims/attack_v3.glb",
-        "assets/characters/knight/anims/attack_v4.glb",
-    };
-    std::printf("[Anim] === Attack candidate audit (native durations) ===\n");
-    for (const char* path : candidates) {
-        try {
-            Animation a = load_animation(path, mesh_.skeleton());
-            std::printf("[Anim]   %-52s -> %.3fs\n", path, a.duration);
-        } catch (const std::exception& e) {
-            std::printf("[Anim]   %-52s -> SKIP (%s)\n", path, e.what());
-        }
-    }
-    std::printf("[Anim] === end audit ===\n");
 }
 
 void Renderer::switch_to(PlayerStateId id, float fade) {
@@ -384,6 +357,16 @@ void Renderer::draw_debug_overlay(const Player& player_obj, float dt) {
     ImGui::GetWindowDrawList()->AddCircleFilled(
         ImVec2(p.x + r, p.y + ImGui::GetFontSize() * 0.5f), r, dot_col);
     ImGui::Dummy(ImVec2(r * 2.0f + 6.0f, ImGui::GetFontSize()));
+
+    // Day 13: stamina bar (green per GDD §15.2). Drains 12/24/25 on
+    // light/heavy/roll entry; 30/s during Jog+sprint; regens 25/s
+    // otherwise. Bar width matches the i-frames row above.
+    ImGui::Separator();
+    const auto& stam = player_obj.stamina();
+    ImGui::Text("stamina  %5.1f / %.0f", stam.current(), Stamina::MAX_VALUE);
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, IM_COL32(80, 200, 110, 255));
+    ImGui::ProgressBar(stam.fraction(), ImVec2(180, 0), "");
+    ImGui::PopStyleColor();
 
     ImGui::Separator();
     const glm::vec3 pp = player_obj.position();

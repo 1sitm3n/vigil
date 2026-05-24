@@ -70,7 +70,6 @@ private:
     void create_texture();
     void create_bone_palette_buffers();
     void load_animations();
-    void inspect_attack_candidates();
     void create_descriptor_pool();
     void create_descriptor_sets();
     void init_imgui();

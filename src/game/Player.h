@@ -2,6 +2,7 @@
 
 #include "core/Window.h"        // InputFrame
 #include "game/PlayerState.h"
+#include "game/Stamina.h"
 
 #include <glm/glm.hpp>
 
@@ -38,6 +39,7 @@ public:
     const glm::vec3&   velocity() const { return velocity_; }
     float              yaw()      const { return yaw_facing_; }   // radians
     const PlayerState& state()    const { return state_; }
+    const Stamina&     stamina()  const { return stamina_; }
 
     // T(position) * Ry(yaw). Renderer pushes this through MVP, replacing the
     // identity matrix that lived in record_command_buffer through Day 10.
@@ -58,6 +60,7 @@ public:
 
 private:
     PlayerState state_;
+    Stamina     stamina_;
     glm::vec3   position_   { 0.0f, 0.0f, 0.0f };
     glm::vec3   velocity_   { 0.0f, 0.0f, 0.0f };
     // Day 12: this model faces +Z at yaw=0 (NOT Mixamo's standard -Z —

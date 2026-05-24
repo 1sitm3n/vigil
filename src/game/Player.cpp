@@ -30,13 +30,55 @@ void Player::update(float dt, const InputFrame& input, const Camera& camera) {
     //    SM only branches on the bool, not direction. Idle <-> Walk/Jog
     //    transitions fire on any of W/A/S/D so strafe-only input still
     //    enters Walk.
+    //
+    //    Day 13: stamina gates each input before the SM sees it.
+    //    - Shift+LMB triggers Heavy (24 cost). LMB-alone triggers Light (12).
+    //      Splitting at the input layer means Shift+LMB never spills into
+    //      heavy + light + sprint simultaneously.
+    //    - Sprint cuts off the moment stamina hits 0. SM sees !pin.sprint
+    //      next tick and drops Jog -> Walk naturally.
+    //    - Block has no entry cost (drain on hit lands Phase 4 with enemies).
+    const bool wants_heavy = input.lmb_pressed &&  input.shift_held;
+    const bool wants_light = input.lmb_pressed && !input.shift_held;
+
     PlayerInput pin;
     pin.move_forward = input.w_held || input.a_held || input.s_held || input.d_held;
-    pin.sprint       = input.shift_held;   // tracked; stamina drain lands Day 13
-    pin.attack       = input.lmb_pressed;
-    pin.dodge        = input.space_pressed;
+    pin.sprint       = input.shift_held   && stamina_.available_for_sprint();
+    pin.attack       = wants_light        && stamina_.available(Stamina::LIGHT_COST);
+    pin.heavy_attack = wants_heavy        && stamina_.available(Stamina::HEAVY_COST);
+    pin.dodge        = input.space_pressed && stamina_.available(Stamina::ROLL_COST);
+    pin.block        = input.rmb_held;
 
     state_.update(dt, pin);
+
+    // 1b) Charge stamina on entry into action states. transition_to() sets
+    //     state_changed_; this latches off the same tick. Light/heavy
+    //     deduct full cost up-front; the gate above guarantees we won't
+    //     go negative.
+    if (state_.state_changed()) {
+        switch (state_.id()) {
+            case PlayerStateId::Attack1:
+            case PlayerStateId::Attack2:
+            case PlayerStateId::Attack3: stamina_.drain(Stamina::LIGHT_COST); break;
+            case PlayerStateId::Heavy:   stamina_.drain(Stamina::HEAVY_COST); break;
+            case PlayerStateId::Roll:    stamina_.drain(Stamina::ROLL_COST);  break;
+            default: break;
+        }
+    }
+
+    // 1c) Tick stamina. GDD §7: regen 25/s except attack/block/sprint.
+    //     Roll DOES regen (the 25 paid at entry is the cost; regen during
+    //     the 0.5s roll claws back ~12.5).
+    const PlayerStateId id = state_.id();
+    const bool sprint_active = (id == PlayerStateId::Jog) && pin.sprint;
+    const bool spending = sprint_active
+                       || id == PlayerStateId::Attack1
+                       || id == PlayerStateId::Attack2
+                       || id == PlayerStateId::Attack3
+                       || id == PlayerStateId::Heavy
+                       || id == PlayerStateId::Block;
+    if (sprint_active) stamina_.drain_rate(Stamina::SPRINT_DRAIN, dt);
+    if (!spending)     stamina_.regen_rate(Stamina::REGEN_RATE, dt);
 
     // 2) Build world-space wish direction from camera basis. forward_xz and
     //    right_xz are already signed correctly — do NOT re-derive trig here.
