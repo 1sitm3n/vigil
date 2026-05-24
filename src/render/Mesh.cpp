@@ -218,4 +218,75 @@ Mesh::Mesh(VulkanContext& vk, const std::string& path) {
     index_buffer_.upload(indices.data(), ib_size);
 }
 
+// =============================================================================
+// Day 12: procedural unit cube for the practice dummy.
+//
+// 8 vertices at the corners of [-0.5, 0.5]^3, 36 indices for 12 triangles.
+// Winding is CCW-outward; if the existing pipeline has back-face culling
+// enabled and the cube renders inverted (interior visible, exterior culled),
+// reverse the index triplets in the table below.
+//
+// All UVs are (0,0) — the cube samples whatever colour sits at the top-left
+// texel of the bound diffuse (currently checker.png). That's a solid debug
+// colour, which is exactly what we want.
+//
+// JOINTS_0 = (127, 0, 0, 0), WEIGHTS_0 = (1, 0, 0, 0): the shader's linear
+// blend collapses to bones[127] * pos. See Renderer's palette upload path
+// for why slot 127 stays identity every frame.
+// =============================================================================
+Mesh Mesh::make_unit_cube(VulkanContext& vk) {
+    Mesh m;
+
+    constexpr float h = 0.5f;
+    const glm::vec3 corners[8] = {
+        {-h, -h, -h}, { h, -h, -h}, { h,  h, -h}, {-h,  h, -h},  // 0..3 back face (-Z)
+        {-h, -h,  h}, { h, -h,  h}, { h,  h,  h}, {-h,  h,  h},  // 4..7 front face (+Z)
+    };
+
+    std::vector<Vertex> verts(8);
+    for (int i = 0; i < 8; ++i) {
+        verts[i].pos     = corners[i];
+        verts[i].uv      = glm::vec2(0.0f, 0.0f);
+        verts[i].joints  = glm::uvec4(127u, 0u, 0u, 0u);
+        verts[i].weights = glm::vec4(1.0f, 0.0f, 0.0f, 0.0f);
+    }
+
+    const std::vector<uint32_t> indices = {
+        // -X face (left)
+        0,4,7,  0,7,3,
+        // +X face (right)
+        1,2,6,  1,6,5,
+        // -Y face (bottom)
+        0,1,5,  0,5,4,
+        // +Y face (top)
+        3,7,6,  3,6,2,
+        // -Z face (back)
+        0,3,2,  0,2,1,
+        // +Z face (front)
+        4,5,6,  4,6,7,
+    };
+
+    m.index_count_ = static_cast<uint32_t>(indices.size());
+    // m.skeleton_ stays default-constructed (joint_count = 0).
+
+    const VkDeviceSize vb_size = sizeof(Vertex) * verts.size();
+    m.vertex_buffer_ = Buffer(
+        vk, vb_size,
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
+    m.vertex_buffer_.upload(verts.data(), vb_size);
+
+    const VkDeviceSize ib_size = sizeof(uint32_t) * indices.size();
+    m.index_buffer_ = Buffer(
+        vk, ib_size,
+        VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+    );
+    m.index_buffer_.upload(indices.data(), ib_size);
+
+    std::printf("[Mesh] unit_cube: 8 vertices, 36 indices, joint=127 (identity slot)\n");
+    return m;
+}
+
 }  // namespace vigil

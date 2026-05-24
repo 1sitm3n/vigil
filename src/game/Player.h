@@ -43,6 +43,13 @@ public:
     // identity matrix that lived in record_command_buffer through Day 10.
     glm::mat4 world_transform() const;
 
+    // Day 12: damage system hook. main.cpp's hit test calls this once per
+    // attack instance when the cone+reach check lands on a target. The flag
+    // it sets resets on the next transition_to(Attack*), so combo chains
+    // each get a fresh hit. Cone state and target list live OUTSIDE Player
+    // by design — Player owns "am I attacking" but not "what's in range."
+    void register_hit() { state_.mark_attack_landed(); }
+
     // Tunables — GDD §6 canonical.
     static constexpr float WALK_SPEED   = 3.0f;   // m/s
     static constexpr float SPRINT_SPEED = 6.0f;
@@ -53,10 +60,15 @@ private:
     PlayerState state_;
     glm::vec3   position_   { 0.0f, 0.0f, 0.0f };
     glm::vec3   velocity_   { 0.0f, 0.0f, 0.0f };
-    float       yaw_facing_ = 0.0f;   // radians; 0 = facing -Z (Mixamo forward)
+    // Day 12: this model faces +Z at yaw=0 (NOT Mixamo's standard -Z —
+    // the Tripo silhouette or the Blender pass on Day 6 left it pointed
+    // the opposite way). Hypothesis from Day 11 confirmed by the
+    // dummy-as-reference test on Day 12. Re-test once the Week-4
+    // Blender re-upload corrects the asset orientation in-source.
+    float       yaw_facing_ = 0.0f;   // radians; 0 = facing +Z (model rest)
 
-    // Latched on Roll entry. Forward = -Z at yaw_facing_ = 0.
-    glm::vec3 roll_dir_ { 0.0f, 0.0f, -1.0f };
+    // Latched on Roll entry. Forward = +Z at yaw_facing_ = 0.
+    glm::vec3 roll_dir_ { 0.0f, 0.0f, 1.0f };
 };
 
 }  // namespace vigil

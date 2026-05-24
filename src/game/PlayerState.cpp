@@ -88,6 +88,7 @@ void PlayerState::transition_to(PlayerStateId next) {
     state_time_    = 0.0f;
     attack_buffer_ = false;
     state_changed_ = true;
+    attack_landed_ = false;   // Day 12: fresh hit budget per attack instance
     phase_ = (next == PlayerStateId::Attack1 ||
               next == PlayerStateId::Attack2 ||
               next == PlayerStateId::Attack3)

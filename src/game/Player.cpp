@@ -43,11 +43,15 @@ void Player::update(float dt, const InputFrame& input, const Camera& camera) {
     //    That is the Phase 1 yaw+pi bug, and it lives here too.
     const glm::vec3 fwd   = camera.forward_xz();
     const glm::vec3 right = camera.right_xz();
+    // Day 12: textbook camera-relative signs. Day 11 flipped these from
+    // textbook on a first-run "looks reversed" call made without a fixed
+    // reference object. The Day 12 dummy at (3,0,-2) revealed the flip
+    // was wrong (pos.z went +ve on W presses = moving toward camera).
     glm::vec3 wish_dir(0.0f);
-    if (input.w_held) wish_dir -= fwd;
-    if (input.s_held) wish_dir += fwd;
-    if (input.d_held) wish_dir -= right;
-    if (input.a_held) wish_dir += right;
+    if (input.w_held) wish_dir += fwd;
+    if (input.s_held) wish_dir -= fwd;
+    if (input.d_held) wish_dir += right;
+    if (input.a_held) wish_dir -= right;
     const float wish_mag = glm::length(wish_dir);
     if (wish_mag > kEpsilon) wish_dir /= wish_mag;
 
@@ -57,7 +61,8 @@ void Player::update(float dt, const InputFrame& input, const Camera& camera) {
         if (wish_mag > kEpsilon) {
             roll_dir_ = wish_dir;
         } else {
-            roll_dir_ = glm::vec3(-std::sin(yaw_facing_), 0.0f, -std::cos(yaw_facing_));
+            // +Z-facing-model: forward = (sin(yaw), 0, cos(yaw)).
+            roll_dir_ = glm::vec3(std::sin(yaw_facing_), 0.0f, std::cos(yaw_facing_));
         }
     }
 
@@ -75,8 +80,10 @@ void Player::update(float dt, const InputFrame& input, const Camera& camera) {
 
     // 5) Face the movement direction. Smooth-lerp over FACE_SMOOTH so
     //    strafe<->forward transitions don't pop. Attacks hold facing.
-    //    Mixamo forward = -Z, so dir = (-sin(yaw), 0, -cos(yaw)) and yaw =
-    //    atan2(-dir.x, -dir.z).
+    //    Day 12: model rest = +Z forward (NOT Mixamo standard). Facing
+    //    at yaw is (sin(yaw), 0, cos(yaw)); solving for yaw given a
+    //    target dir gives atan2(dir.x, dir.z). Re-test if Week-4 Blender
+    //    re-upload corrects the source orientation.
     glm::vec3 face_dir(0.0f);
     if (state_.id() == PlayerStateId::Roll) {
         face_dir = roll_dir_;
@@ -87,7 +94,7 @@ void Player::update(float dt, const InputFrame& input, const Camera& camera) {
         face_dir = wish_dir;
     }
     if (glm::length(face_dir) > kEpsilon) {
-        const float target_yaw = std::atan2(-face_dir.x, -face_dir.z);
+        const float target_yaw = std::atan2(face_dir.x, face_dir.z);
         const float alpha = std::clamp(dt / FACE_SMOOTH, 0.0f, 1.0f);
         yaw_facing_ = lerp_yaw_shortest(yaw_facing_, target_yaw, alpha);
     }

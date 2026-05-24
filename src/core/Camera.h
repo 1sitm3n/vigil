@@ -49,9 +49,11 @@ private:
     // frame from player.position(). Defaults shown for safety.
     glm::vec3 target_   { 0.0f, 0.5f, 0.0f };
 
-    // yaw=0 -> camera at +Z looking down -Z. Knight default faces -Z
-    // (Mixamo forward), so yaw=0 sees the knight's back. pitch tilts the
-    // camera down at the player.
+    // yaw=0 -> camera at +Z looking down -Z. Day 12: the knight rest
+    // pose faces +Z (NOT Mixamo's standard -Z; see Player.cpp), so at
+    // yaw=0 the camera sees the knight's FRONT. Most natural starting
+    // pose comes from yaw_ defaulting to pi (knight back to camera) — or
+    // just let mouse-look settle. pitch tilts the camera down at the player.
     float     yaw_      = 0.0f;
     float     pitch_    = glm::radians(20.0f);
     float     distance_ = 4.0f;

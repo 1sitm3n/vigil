@@ -43,6 +43,7 @@ Renderer::Renderer(VulkanContext& vk,
     create_command_buffers();
     create_sync_objects();
     create_mesh();
+    dummy_mesh_ = Mesh::make_unit_cube(vk_);  // Day 12 practice dummy
     create_texture();
     create_bone_palette_buffers();
     load_animations();
@@ -430,6 +431,11 @@ void Renderer::draw_frame(const Camera& camera, const Player& player) {
     last_frame_time_ = now;
 
     animator_.update(dt);
+    // CONTRACT (Day 12): the std::fill leaves slots joint_count..127 set
+    // to identity. The practice dummy's vertex JOINTS_0 = (127,0,0,0)
+    // and WEIGHTS_0 = (1,0,0,0) target slot 127 to render untransformed.
+    // If this fill is removed or reordered, Mesh::make_unit_cube needs
+    // its own descriptor set + identity-palette UBO.
     std::fill(palette_scratch_.begin(), palette_scratch_.end(), glm::mat4(1.0f));
     animator_.compute_bone_palette(palette_scratch_.data());
     bone_palette_buffers_[current_frame_].upload(palette_scratch_.data(),
@@ -536,6 +542,23 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
     vkCmdBindIndexBuffer(cmd, mesh_.index_buffer_handle(), 0, VK_INDEX_TYPE_UINT32);
 
     vkCmdDrawIndexed(cmd, mesh_.index_count(), 1, 0, 0, 0);
+
+    // Day 12: practice dummy. Same pipeline + descriptor set as the knight
+    // (see Mesh::make_unit_cube header comment for why this works). Only
+    // MVP push + vertex/index rebind + drawIndexed differ.
+    {
+        glm::mat4 dummy_model = glm::translate(glm::mat4(1.0f), DUMMY_POSITION);
+        glm::mat4 dummy_mvp   = camera.projection(aspect) * camera.view() * dummy_model;
+        vkCmdPushConstants(cmd, pipeline_.layout(),
+                           VK_SHADER_STAGE_VERTEX_BIT,
+                           0, sizeof(dummy_mvp), &dummy_mvp);
+
+        VkBuffer     dvbufs[]   = { dummy_mesh_.vertex_buffer_handle() };
+        VkDeviceSize doffsets[] = { 0 };
+        vkCmdBindVertexBuffers(cmd, 0, 1, dvbufs, doffsets);
+        vkCmdBindIndexBuffer(cmd, dummy_mesh_.index_buffer_handle(), 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, dummy_mesh_.index_count(), 1, 0, 0, 0);
+    }
 
     // ImGui overlay layered on top of the mesh, still inside the main render
     // pass. Draw data was finalised by main.cpp's ImGui::Render() call

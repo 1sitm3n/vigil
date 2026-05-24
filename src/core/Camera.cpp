@@ -8,7 +8,14 @@
 namespace vigil {
 
 void Camera::orbit(float dx, float dy) {
-    yaw_   += dx * orbit_sensitivity;
+    // Day 12: dx sign flipped so mouse-RIGHT rotates the view RIGHT
+    // (background scrolls LEFT). Standard 3rd-person convention
+    // (Souls / Skyrim / Witcher). Original code's yaw_ += dx gave the
+    // inverse — view turned left on mouse right, which read as "the
+    // camera moves the opposite way" with the dummy as a reference.
+    // dy kept positive: mouse-DOWN tilts view DOWN (non-inverted Y).
+    // Flip dy's sign too if you prefer Y-invert.
+    yaw_   -= dx * orbit_sensitivity;
     pitch_ += dy * orbit_sensitivity;
     pitch_  = std::clamp(pitch_, min_pitch_, max_pitch_);
 

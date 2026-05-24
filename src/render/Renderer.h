@@ -27,6 +27,11 @@ public:
     static constexpr uint32_t FRAMES_IN_FLIGHT = 2;
     static constexpr uint32_t MAX_BONES        = 128;
 
+    // Day 12: single practice dummy world position. Used by Renderer
+    // for the draw call and by main.cpp for cone-overlap hit detection.
+    // C++17 inline static; relies on glm 1.0+ constexpr vec3 ctor.
+    static constexpr glm::vec3 DUMMY_POSITION{3.0f, 0.0f, -2.0f};
+
     Renderer(VulkanContext& vk,
              const Swapchain& swapchain,
              const GraphicsPipeline& pipeline,
@@ -86,6 +91,7 @@ private:
     uint32_t                                current_frame_ = 0;
 
     Mesh                                          mesh_;
+    Mesh                                          dummy_mesh_;  // Day 12: practice dummy cube
     Texture                                       diffuse_texture_;
     std::array<Buffer, FRAMES_IN_FLIGHT>          bone_palette_buffers_{};
     VkDescriptorPool                              descriptor_pool_ = VK_NULL_HANDLE;

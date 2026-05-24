@@ -20,6 +20,15 @@ public:
     Mesh() = default;
     Mesh(VulkanContext& vk, const std::string& path);
 
+    // Day 12: procedural unit cube for the practice dummy. Half-extent 0.5,
+    // empty skeleton (has_skin() returns false). Vertex JOINTS_0 is set to
+    // (127,0,0,0) and WEIGHTS_0 to (1,0,0,0) so the linear-blend skin math
+    // in triangle.vert reduces to 1.0 * bones[127] * pos. Slot 127 is the
+    // reserved identity slot — palette_scratch_ in Renderer is filled with
+    // identity every frame before compute_bone_palette overwrites the
+    // ~65 Mixamo joints (0..joint_count-1), leaving 127 reliably identity.
+    static Mesh make_unit_cube(VulkanContext& vk);
+
     Mesh(const Mesh&) = delete;
     Mesh& operator=(const Mesh&) = delete;
     Mesh(Mesh&&) noexcept = default;

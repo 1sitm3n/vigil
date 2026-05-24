@@ -52,6 +52,13 @@ const char* to_string(AttackPhase   phase);
 // Input buffering: LMB during startup/active is buffered, consumed at
 // recovery start to chain. Dodge during attack recovery cancels into Roll.
 // Roll itself cannot be cancelled (GDD §6).
+//
+// Day 12: attack_landed_ gates the hit test to one-shot per attack instance.
+// Reset on every transition_to() so a fresh combo step gets a fresh hit
+// budget. Mutator is intentionally non-private so Player::register_hit()
+// can forward to it without making the whole class friend; SM-internal
+// invariants stay enforced because the only writer outside transition_to
+// just sets true (idempotent).
 class PlayerState {
 public:
     PlayerState() = default;
@@ -69,6 +76,14 @@ public:
 
     // Damage system contract (Phase 3+): true while in roll i-frame window.
     bool iframes_active() const;
+
+    // Day 12 hit-detection one-shot. Set by Player::register_hit() on the
+    // first frame this attack instance lands; cleared on the next
+    // transition_to() so combo chain Attack1 -> Attack2 -> Attack3 each get
+    // an independent fresh hit. 0.10s active * 60Hz = 6 frames in Active
+    // phase, so without this every attack would print [HIT] 6 times.
+    bool attack_landed()      const { return attack_landed_; }
+    void mark_attack_landed()       { attack_landed_ = true; }
 
 private:
     void update_attack(const PlayerInput& in);
@@ -89,6 +104,7 @@ private:
     float         state_time_    = 0.0f;
     bool          attack_buffer_ = false;
     bool          state_changed_ = false;
+    bool          attack_landed_ = false;
 };
 
 }  // namespace vigil
