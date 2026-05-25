@@ -955,3 +955,335 @@
 - Day 14: parry + riposte (i-frames already exposed via
   PlayerState::iframes_active())
 - Day 15: holy bolt + faith resource + Phase 3 checkpoint
+
+## Day 12 — 2026-05-24 — Practice dummy, hit detection, controls
+
+**Shipped:**
+- src/render/Mesh: Mesh::make_unit_cube factory. 8-vertex cube,
+  half-extent 0.5m. Vertex JOINTS_0=(127,0,0,0), WEIGHTS_0=(1,0,0,0)
+  target reserved palette slot 127, which the per-frame std::fill
+  in draw_frame leaves at identity (now annotated as a contract).
+  Single extra drawIndexed, no new pipeline / descriptor set / shader
+- src/render/Renderer: dummy_mesh_ built in ctor. DUMMY_POSITION
+  (3,0,-2) as inline static constexpr in the public interface.
+  Second drawIndexed in record_command_buffer between knight and ImGui
+- src/game/PlayerState: attack_landed_ flag + accessor +
+  mark_attack_landed mutator. Reset on every transition_to so
+  Attack1/2/3 each get one shot. 0.10s Active * 60Hz = 6 frames;
+  without the latch [HIT] would print 6x per swing
+- src/game/Player: register_hit() forwards to
+  state_.mark_attack_landed. SM internals stay private to Player
+- src/main.cpp: cone hit detection between player.update and ImGui
+  frame. 90 deg (45 half), 2.0m reach, XZ only. Gated on
+  AttackPhase::Active && !attack_landed(). Prints [HIT] <state>
+  dist=Xm angle=Ydeg on landing
+
+**Control-convention fixes the dummy surfaced:**
+- src/game/Player.cpp: WASD signs reverted to textbook camera-relative
+  (W += fwd, A -= right, etc). Day 11's flip was a first-run "looks
+  reversed" call made without a fixed reference object; the dummy at
+  (3,0,-2) showed pos.z went +ve on W = moving toward camera
+- Model rest pose faces +Z, NOT Mixamo's -Z (Day 11 hypothesis
+  confirmed). yaw solver is atan2(face_dir.x, face_dir.z); roll
+  fallback and hit-test cone facing both use (sin yaw, 0, cos yaw).
+  Re-test if Week 4 Blender re-upload corrects orientation in-asset
+- src/core/Camera.cpp: orbit dx sign flipped. Mouse RIGHT now rotates
+  view RIGHT (Souls / Skyrim convention). dy left positive
+
+**Broken / pending:**
+- 1m bind-pose / checker tex / backface bleed - Day 7 carry, Week 4
+- Mid-blend pose-pop on chain-spam - Day 9 carry, deferred
+- inspect_attack_candidates() still called in Renderer ctor, ~150ms
+  startup. Removal triggers Day 13 once attack set is locked
+- Body rotation tied to wish_dir (Day 11 design call) - S press
+  pivots knight 180 to face camera. Stylised, not buggy; revisit
+  when strafe anims land Phase 4
+- Stale /usr/local/share/vulkan dup-layer warnings, Day 1 carry
+
+**Notes for tomorrow:**
+- Day 13 per roadmap: heavy attack + block + stamina
+- Heavy = Shift+LMB, single hit, GDD 6 0.55/0.15/0.70, costs 24, no
+  combo, can roll-cancel during recovery
+- Block = hold RMB, locks position, drains stamina on hit (no hits
+  until Phase 4). Day 14 will layer parry edge-detection on the same
+  held state
+- Stamina = new class on Player. Max 100, regen 25/s except
+  attack/block/sprint, costs 12/24/25, sprint drain 30/s
+- Gate-at-cost (12/24/25) instead of roadmap's literal "<10 for
+  attack" which would allow negative stamina
+
+
+## Day 13 — 2026-05-24 — Heavy, block, stamina
+
+**Shipped:**
+- src/game/Stamina: header-only resource. Constants per GDD 6/7
+  (MAX_VALUE 100, REGEN_RATE 25, SPRINT_DRAIN 30, costs 12/24/25).
+  available(cost) gate, drain(amount), drain_rate(rate,dt),
+  regen_rate(rate,dt). Day 14 Faith will mirror this layout
+- src/game/PlayerState: enum grew Heavy=7, Block=8, Count=9.
+  Heavy reuses Attack1/2/3's phase machine via update_attack with
+  is_heavy selector (0.55/0.15/0.70 vs 0.30/0.10/0.40, combo chain
+  bypassed). Block is held state, no internal timer, exits only on
+  RMB release. PlayerInput grew heavy_attack and block fields
+- src/game/Player: PlayerInput build splits Shift+LMB to heavy_attack,
+  gates every action through stamina.available(cost). pin.sprint
+  drops false the tick stamina hits 0; SM drops Jog -> Walk next
+  tick. Drain on entry latched off state_changed(). Tick at end of
+  update applies regen / sprint drain
+- src/render/Renderer: Heavy slot loads attack_v3.glb compressed to
+  1.40s (1.24x). Block slot loads block_idle.glb at native speed.
+  Debug overlay grew green stamina bar between i-frames dot and
+  pos/vel/yaw (GDD 15.2 spec)
+- src/render/Renderer: inspect_attack_candidates() removed (Day 10
+  audit, attack set locked Day 13). ~150ms startup recovered.
+  Declaration also stripped from Renderer.h
+
+**Broken / pending:**
+- 1m bind-pose / checker tex / backface bleed - Day 7 carry, Week 4
+- Mid-blend pose-pop - Day 9 carry, deferred
+- Body rotation tied to wish_dir - Day 11 design call, defer to
+  Phase 4 strafe anims
+- Stale /usr/local/share/vulkan dup-layer warnings, Day 1 carry
+- Block stance-locks all movement (GDD doesn't require this; could
+  allow slow walk in block when it feels right)
+- Roll allows regen during the 0.5s i-frame window (GDD-literal:
+  regen-except-attack/block/sprint, roll not listed). Net effect:
+  rolling claws back ~12.5 of the 25 cost. Generous; revisit if it
+  trivialises sustained combat
+
+**Notes for tomorrow:**
+- Day 14 per roadmap: parry + riposte. Roll + i-frames shipped Day 9;
+  iframes_active() is the damage-system contract
+- Parry: tap RMB (edge, not held) opens 0.15s parry window. If
+  incoming hit during the window -> parry -> Riposte. Else if in
+  Block -> block damage (drain 50% of damage in stamina). Else ->
+  take full damage
+- Riposte: new PlayerStateId. Pull Mixamo "Standing Melee Combat
+  Attack", 1.5s budget, 60 dmg, terminal (no chain, NOT
+  roll-cancellable). attack.glb at 2.33s -> 1.55x to 1.5s is a fine
+  fallback if exact filename not present
+- Window needs pending_rmb_press_ (edge mirror of rmb_down_) and
+  pending_n_press_ (debug fake-hit trigger)
+- N key fires a fake incoming attack at the knight 0.5s after press
+  (no enemies yet - parry has nothing to react to without it)
+- Visual hit reaction (white flash, damage number, hitstop) is
+  Phase 6. Day 14 console-prints [PARRY], [BLOCKED], [DAMAGED]
+
+
+## Handoff to Day 14 instance
+
+**State at end of Day 13:**
+- Player owns Stamina (header-only). All actions gated through
+  available(cost); drain on state_changed entry; tick at end of
+  update for regen / sprint drain
+- PlayerStateId: Idle/Walk/Jog/Attack1/Attack2/Attack3/Roll/Heavy/
+  Block/Count=9. anim_slots_ array auto-sized
+- PlayerInput: move_forward/sprint/attack/heavy_attack/dodge/block.
+  attack and heavy_attack are mutex on shift_held
+- Heavy: Shift+LMB, single hit, attack_v3.glb at 1.24x, can
+  roll-cancel during recovery, no combo
+- Block: hold RMB, position locked, facing locked, no regen during
+  block. Exits only on RMB release
+- Practice dummy at (3,0,-2) - vigil::Renderer::DUMMY_POSITION
+- Hit detection: main.cpp, 90 deg cone, 2.0m, AttackPhase::Active +
+  attack_landed_ gated. Prints [HIT] <state> dist angle
+- WASD textbook camera-relative. Model rest = +Z forward at yaw=0.
+  Mouse RIGHT turns view RIGHT (Souls convention)
+
+**Day 14 work (per roadmap Phase 3):**
+- New PlayerStateId::Riposte. 1.5s budget, single hit, terminal -
+  not roll-cancellable, not combo-chainable. Pull "Standing Melee
+  Combat Attack" (or attack.glb at 2.33s -> 1.55x as fallback)
+- Parry edge detection. parry_window_remaining_ float on Player or
+  PlayerState. RMB edge press (not held) sets to 0.15s. Decrement
+  each tick. While > 0, an incoming hit upgrades the response from
+  "block damage" to "parry -> riposte"
+- Window: add pending_rmb_press_ (edge mirror of rmb_down_) and
+  pending_n_press_ (debug fake-hit trigger)
+- Fake incoming attack on N key. incoming_hit_time_ float in
+  main.cpp, set to now+0.5 on N press, fires when reached. On fire:
+  parry_window > 0 -> Riposte. Currently in Block (window expired)
+  -> drain stamina 50% of damage. Else -> print [DAMAGED]
+- Riposte hit detection rides the existing main.cpp cone test.
+  Needs AttackPhase::Active during its active frames - wire via
+  update_attack's is_heavy/is_riposte split, OR add a is_attacker
+  helper that includes Heavy + Riposte
+
+**Files the next instance will need on turn 1:**
+- src/game/PlayerState.{h,cpp} - add Riposte, parry window state
+- src/game/Player.{h,cpp} - parry window or pass-through hooks
+- src/core/Window.{h,cpp} - pending_rmb_press_ + pending_n_press_
+- src/render/Renderer.{h,cpp} - Riposte anim slot
+- src/main.cpp - N-key fake-hit dispatcher
+
+**Watch for:**
+- RMB tap-vs-hold ambiguity. Block triggers on rmb_held (true the
+  whole time button is down). Parry triggers on the EDGE press. A
+  single RMB press fires BOTH on first frame: edge=true AND
+  held=true. Sequence: enter Block, open 0.15s parry window. Hit in
+  first 150ms -> parry. Hit after window decays (still held) -> block.
+  Matches Souls feel - defensive tap is parry, held wall is block
+- Riposte must NOT be roll-cancellable. Mirror Attack3 (terminal)
+  in update_attack, OR special-case the Riposte branch
+- "Standing Melee Combat Attack" filename: FBX2glTF snake_cases, so
+  likely standing_melee_combat_attack.glb. ls grep -i melee to
+  confirm. attack_v3.glb is taken by Heavy; attack.glb at 2.33s ->
+  1.55x to 1.5s budget is the clean fallback
+
+**Phase 3 plan reminder:**
+- Day 12: practice dummy + hit detection (shipped)
+- Day 13: heavy + block + stamina (shipped)
+- Day 14: parry + riposte (today)
+- Day 15: holy bolt + faith resource + Phase 3 checkpoint
+
+## Day 14 — 2026-05-25 — Parry, riposte, fake-hit dispatcher
+
+**Shipped:**
+- src/game/PlayerState: Riposte=9, Count=10. Riposte mirrors Heavy in
+  update_attack via is_riposte branch with its own frame data
+  (0.20/0.20/1.10 = 1.5s). Terminal: no combo chain, NOT roll-cancellable
+  (dodge gate clauses on !is_riposte). pin.riposte added to PlayerInput;
+  top-priority transition out of Idle/Walk/Jog/Block. Block exits on
+  pin.riposte even with RMB still held - the parry consumes the stance
+- src/game/Player: parry_window_remaining_ float + riposte_pending_ bool.
+  tick_parry_window(dt, input) decays first then refreshes on rmb_pressed
+  edge - fresh press gets full 0.15s, not 0.15-dt. try_parry() consumes
+  window + sets riposte_pending_, returns bool. absorb_block_hit(dmg)
+  drains 50% as stamina (GDD 6). update() reads riposte_pending_ into
+  pin.riposte and clears, single-shot. Riposte joins the spending
+  state list (no regen during)
+- src/core/Window: InputFrame grew rmb_pressed (edge) and n_pressed
+  (debug). pending_rmb_press_ set inside BUTTON_DOWN/RIGHT alongside
+  rmb_down_; pending_n_press_ on SDLK_N with !repeat. consume_input
+  drains both pendings per existing pattern
+- src/render/Renderer: Riposte slot loads attack.glb (2.333s native ->
+  1.556x to 1.5s). Debug overlay grew a PARRY line in gold, visible
+  only while window > 0 - short 150ms burst so the panel stays quiet
+- src/main.cpp: per-frame pipeline split - tick_parry_window FIRST,
+  then fake-hit timer + damage resolve, then player.update(). Order is
+  load-bearing: lets a same-frame RMB press catch an N-pressed-prior
+  fake hit firing this frame, with no 1-frame latency to the riposte
+  transition. fake_hit_timer is -1 = inactive; latest N press wins
+- src/main.cpp: cone hit detection now fires for Riposte automatically
+  (shares AttackPhase::Active). [HIT] Riposte prints during the 0.20s
+  active window - confirmed in the test log at dist=1.15m
+
+**Broken / pending:**
+- 1m bind-pose / checker tex / backface bleed - Day 7 carry, Week 4
+- Mid-blend pose-pop - Day 9 carry, deferred
+- Body rotation tied to wish_dir - Day 11 design call, defer to Phase 4
+- Stale /usr/local/share/vulkan dup-layer warnings, Day 1 carry
+- [PARRY] window=0.150s print is always the PARRY_WINDOW constant, not
+  the remaining-at-consume value (try_parry zeros the window before
+  there is anything to log). Cosmetic; useful tuning data lost. Fix is
+  one-liner - either drop the field from the print or return float
+  from try_parry. Deferred to Day 15 morning
+- Block stance-locks all movement - Day 13 carry
+- Roll allows regen during the 0.5s i-frame window - Day 13 carry
+
+**Notes for tomorrow:**
+- Day 15 per roadmap: Holy Bolt spell + Faith resource + Phase 3 checkpoint
+- Faith: clone of Stamina header layout. MAX_VALUE 60, REGEN_RATE 5/s,
+  BOLT_COST 20. No "spending" gate - regens always (GDD 6: 5/s, always).
+  Add Faith bar to debug overlay between stamina and pos/vel/yaw (blue
+  per GDD 15.2)
+- Holy Bolt: Q key (new edge). New PlayerStateId::Cast (10), Count=11.
+  0.8s cast, locked in place, interruptible (taking damage cancels +
+  refunds 50% Faith). Cast anim slot: casting.glb (Pro Pack already in
+  anims/) - native duration TBC, scale to 0.8s budget
+- Projectile entity. New src/game/Projectile.{h,cpp} - position,
+  velocity, lifetime, alive flag, optional target ref. main.cpp owns
+  std::vector<Projectile>. Spawn on cast complete; despawn on target
+  hit or lifetime expiry. Travel 18 m/s, weak homing in 30 deg cone
+  toward nearest target (just the dummy until Phase 4)
+- Projectile mesh: reuse the slot-127 identity trick. Mesh::make_unit_orb
+  factory (or scale the cube small) - the cube path already proves the
+  pipeline can draw a non-skinned object with the existing descriptor
+  set. Tripo for a crystal/orb Holy Bolt mesh is GDD 18.4 work but
+  the cube placeholder ships fast
+- Projectile hit detection: per-projectile vs dummy AABB inside main.cpp,
+  same shape as the existing player cone test. Console-print [BOLT HIT]
+  dmg=50 on landing
+- Phase 3 checkpoint clip: record 90s of all combat moves - combo, heavy,
+  block, parry into riposte, roll w/ i-frames, holy bolt cast + hit.
+  Per roadmap Day 15 deliverable: this becomes trailer footage
+
+## Handoff to Day 15 instance
+
+**State at end of Day 14:**
+- Player owns parry_window_remaining_ + riposte_pending_. tick_parry_window
+  decays then refreshes on rmb_pressed edge. try_parry consumes window
+  and sets riposte_pending_. absorb_block_hit drains 50% as stamina.
+  update() reads riposte_pending_ into pin.riposte, clears single-shot
+- PlayerStateId: Idle/Walk/Jog/Attack1/Attack2/Attack3/Roll/Heavy/Block/
+  Riposte/Count=10. Riposte 1.5s budget (0.20/0.20/1.10), terminal,
+  attack.glb at 1.556x. anim_slots_ array auto-sized
+- PlayerInput: move_forward/sprint/attack/heavy_attack/dodge/block/riposte.
+  riposte set by try_parry pipeline, top-priority transition out of
+  Idle/Walk/Jog/Block
+- Window: InputFrame.rmb_pressed (edge) and .n_pressed (debug).
+  pending_rmb_press_ set alongside rmb_down_ in BUTTON_DOWN/RIGHT.
+  SDLK_N with !repeat
+- main.cpp per-frame pipeline:
+  1) tick_parry_window  (window decay + edge refresh)
+  2) fake-hit timer tick + on-fire resolve (try_parry / block / damaged)
+  3) player.update     (SM consumes riposte_pending_)
+  4) cone hit detection (now fires for Riposte too)
+- Practice dummy at (3,0,-2) - vigil::Renderer::DUMMY_POSITION
+- Stamina shipped Day 13. Faith follows the same header pattern Day 15
+
+**Day 15 work (per roadmap Phase 3):**
+- src/game/Faith.h: clone Stamina header. MAX_VALUE 60, REGEN_RATE 5/s
+  (GDD 6, always-on regen), BOLT_COST 20. Mirror the available/drain/
+  drain_rate/regen_rate API exactly so Player.update() loop reads
+  consistent. No spending gate
+- src/game/Player: add Faith member + accessor. Cast gates on
+  faith_.available(Faith::BOLT_COST), drains on Cast entry, refunds
+  50% on cancellation
+- src/game/PlayerState: add PlayerStateId::Cast (10), Count=11. 0.8s
+  budget, locked in place. Cancellable by incoming damage (Phase 4
+  contract); Day 15 just locks in the cast lifecycle. Recovery exits
+  to default_locomotion. pin.cast added to PlayerInput; q_pressed edge
+- src/core/Window: pending_q_press_ + InputFrame.q_pressed, mirror
+  space_pressed pattern
+- src/render/Renderer: Cast slot loads casting.glb (verify native, scale
+  to 0.8s). Add blue Faith bar to debug overlay under green stamina
+- src/game/Projectile.{h,cpp}: new files. position/velocity/lifetime/
+  alive struct, update(dt) integrates, optional weak-homing 30 deg
+  cone toward nearest target. main.cpp owns std::vector<Projectile>,
+  spawns on Cast active frame, ticks each frame, deletes dead.
+  Renderer.cpp adds a per-projectile draw loop using dummy_mesh_ +
+  per-projectile MVP push (same slot-127 trick)
+- src/main.cpp: spawn projectile when Cast hits AttackPhase::Active
+  (single-shot per cast via attack_landed_ analog). Per-projectile
+  AABB test against DUMMY_POSITION, half-extent 0.5m. [BOLT HIT]
+  dmg=50 on landing; despawn projectile
+- Phase 3 checkpoint clip: 90s recording of all combat moves
+
+**Files the next instance will need on turn 1:**
+- src/game/Stamina.h - template for Faith.h
+- src/game/PlayerState.{h,cpp} - add Cast, pin.cast
+- src/game/Player.{h,cpp} - add Faith member + projectile spawn hook
+- src/core/Window.{h,cpp} - pending_q_press_ + InputFrame.q_pressed
+- src/render/Renderer.{h,cpp} - Cast anim slot + faith bar + projectile draw
+- src/main.cpp - projectile pool ownership + tick + AABB test
+
+**Watch for:**
+- casting.glb already in anims (Day 13 inventory: casting.glb +
+  casting_v2.glb). Native duration TBC at load; scale to 0.8s budget
+  per GDD 6
+- Cast must be cancellable by incoming damage. Day 15 lays the
+  contract; Phase 4 enemies wire the cancellation. For Day 15, gate
+  the cancel behind a debug hook (N during cast? recycle the fake-hit
+  dispatcher) to verify the refund-50% path
+- Projectile lifetime cap: ~3s. Without a cap, missed bolts fly forever
+- Slot-127 cube trick proves the pipeline can draw non-skinned objects.
+  Projectile mesh can ride the same path - reuse dummy_mesh_ or add
+  Mesh::make_unit_sphere if the cube looks too geometric. Tripo orb
+  is GDD 18.4 work, fine to defer
+
+**Phase 3 plan reminder:**
+- Day 12: practice dummy + hit detection (shipped)
+- Day 13: heavy + block + stamina (shipped)
+- Day 14: parry + riposte (shipped)
+- Day 15: holy bolt + faith + Phase 3 checkpoint (today)

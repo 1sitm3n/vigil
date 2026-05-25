@@ -8,6 +8,7 @@ void PlayerState::update(float dt, const PlayerInput& in) {
 
     switch (state_) {
         case PlayerStateId::Idle:
+            if (in.riposte)      { transition_to(PlayerStateId::Riposte); break; }
             if (in.heavy_attack) { transition_to(PlayerStateId::Heavy);   break; }
             if (in.attack)       { transition_to(PlayerStateId::Attack1); break; }
             if (in.dodge)        { transition_to(PlayerStateId::Roll);    break; }
@@ -17,6 +18,7 @@ void PlayerState::update(float dt, const PlayerInput& in) {
             break;
 
         case PlayerStateId::Walk:
+            if (in.riposte)       { transition_to(PlayerStateId::Riposte); break; }
             if (in.heavy_attack)  { transition_to(PlayerStateId::Heavy);   break; }
             if (in.attack)        { transition_to(PlayerStateId::Attack1); break; }
             if (in.dodge)         { transition_to(PlayerStateId::Roll);    break; }
@@ -26,6 +28,7 @@ void PlayerState::update(float dt, const PlayerInput& in) {
             break;
 
         case PlayerStateId::Jog:
+            if (in.riposte)       { transition_to(PlayerStateId::Riposte); break; }
             if (in.heavy_attack)  { transition_to(PlayerStateId::Heavy);   break; }
             if (in.attack)        { transition_to(PlayerStateId::Attack1); break; }
             if (in.dodge)         { transition_to(PlayerStateId::Roll);    break; }
@@ -38,6 +41,7 @@ void PlayerState::update(float dt, const PlayerInput& in) {
         case PlayerStateId::Attack2:
         case PlayerStateId::Attack3:
         case PlayerStateId::Heavy:
+        case PlayerStateId::Riposte:
             update_attack(in);
             break;
 
@@ -49,13 +53,12 @@ void PlayerState::update(float dt, const PlayerInput& in) {
             break;
 
         case PlayerStateId::Block:
-            // Hold-to-block. Day 13: only RMB release exits. Day 14 parry will
-            // ride on top — tap RMB within 0.15s of incoming damage opens the
-            // riposte window; that's an input-edge detection layered on this
-            // same held state.
-            if (!in.block) {
-                transition_to(default_locomotion(in));
-            }
+            // Day 14: riposte takes priority. Player::try_parry already
+            // consumed the parry window and set riposte_pending_; the SM
+            // jumps straight to Riposte even if RMB is still held — block
+            // is finished the moment the parry catches.
+            if (in.riposte) { transition_to(PlayerStateId::Riposte); break; }
+            if (!in.block)  { transition_to(default_locomotion(in));  break; }
             break;
 
         case PlayerStateId::Count:
@@ -64,36 +67,47 @@ void PlayerState::update(float dt, const PlayerInput& in) {
 }
 
 void PlayerState::update_attack(const PlayerInput& in) {
-    const bool  is_heavy    = (state_ == PlayerStateId::Heavy);
-    const float startup     = is_heavy ? HEAVY_STARTUP  : ATK_STARTUP;
-    const float active      = is_heavy ? HEAVY_ACTIVE   : ATK_ACTIVE;
-    // Light: COMBO_WINDOW (0.50s) covers recovery + 0.10s grace for chain.
-    // Heavy: HEAVY_RECOVERY (0.70s) is just the recovery duration — no grace,
-    // no combo chain (GDD §6: heavy is single-hit).
-    const float post_active = is_heavy ? HEAVY_RECOVERY : COMBO_WINDOW;
+    const bool is_heavy   = (state_ == PlayerStateId::Heavy);
+    const bool is_riposte = (state_ == PlayerStateId::Riposte);
+    const bool is_light   = !is_heavy && !is_riposte;
+
+    float startup, active, post_active;
+    if (is_riposte) {
+        startup     = RIPOSTE_STARTUP;
+        active      = RIPOSTE_ACTIVE;
+        post_active = RIPOSTE_RECOVERY;
+    } else if (is_heavy) {
+        startup     = HEAVY_STARTUP;
+        active      = HEAVY_ACTIVE;
+        post_active = HEAVY_RECOVERY;
+    } else {
+        // Light: COMBO_WINDOW covers recovery + 0.10s grace for chain.
+        startup     = ATK_STARTUP;
+        active      = ATK_ACTIVE;
+        post_active = COMBO_WINDOW;
+    }
 
     const float t = state_time_;
 
     if (t < startup) {
         phase_ = AttackPhase::Startup;
-        if (!is_heavy && in.attack) attack_buffer_ = true;
+        if (is_light && in.attack) attack_buffer_ = true;
         return;
     }
     if (t < startup + active) {
         phase_ = AttackPhase::Active;
-        if (!is_heavy && in.attack) attack_buffer_ = true;
+        if (is_light && in.attack) attack_buffer_ = true;
         return;
     }
 
     if (t < startup + active + post_active) {
         phase_ = AttackPhase::Recovery;
 
-        // Roll-cancel: defensive option mid-recovery. Applies to both light
-        // and heavy per GDD §6 ("Heavy ... Cancels into roll only").
-        if (in.dodge) { transition_to(PlayerStateId::Roll); return; }
+        // Roll-cancel: light and heavy only. Riposte is terminal (GDD §6).
+        if (in.dodge && !is_riposte) { transition_to(PlayerStateId::Roll); return; }
 
-        // Combo chain on light only — heavy is terminal.
-        if (!is_heavy) {
+        // Combo chain on light only.
+        if (is_light) {
             const bool want_chain = (in.attack || attack_buffer_);
             if (want_chain && state_ != PlayerStateId::Attack3) {
                 const PlayerStateId next = (state_ == PlayerStateId::Attack1)
@@ -106,7 +120,7 @@ void PlayerState::update_attack(const PlayerInput& in) {
         return;
     }
 
-    // Recovery window expired — return to locomotion state implied by input.
+    // Recovery expired — return to locomotion implied by input.
     transition_to(default_locomotion(in));
 }
 
@@ -115,11 +129,12 @@ void PlayerState::transition_to(PlayerStateId next) {
     state_time_    = 0.0f;
     attack_buffer_ = false;
     state_changed_ = true;
-    attack_landed_ = false;   // Day 12: fresh hit budget per attack instance
+    attack_landed_ = false;   // fresh hit budget per attack instance
     phase_ = (next == PlayerStateId::Attack1 ||
               next == PlayerStateId::Attack2 ||
               next == PlayerStateId::Attack3 ||
-              next == PlayerStateId::Heavy)
+              next == PlayerStateId::Heavy   ||
+              next == PlayerStateId::Riposte)
               ? AttackPhase::Startup
               : AttackPhase::None;
 }
@@ -150,6 +165,7 @@ const char* to_string(PlayerStateId id) {
         case PlayerStateId::Roll:    return "Roll";
         case PlayerStateId::Heavy:   return "Heavy";
         case PlayerStateId::Block:   return "Block";
+        case PlayerStateId::Riposte: return "Riposte";
         case PlayerStateId::Count:   return "Count";
     }
     return "?";

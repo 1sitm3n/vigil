@@ -1,13 +1,13 @@
 // =============================================================================
-//  Vigil — Day 11
-//  Phase 3 opens: Player class owns position, facing, velocity, and the SM.
-//  Third-person follow camera at offset (5.5m, pitch 25°) around the player's
-//  head-height pivot. Mouse-look is unconditional (no RMB gate); cursor is
-//  captured for the session via SDL_SetWindowRelativeMouseMode.
+//  Vigil — Day 14
+//  Phase 3 continues: parry + riposte. RMB edge press opens a 0.15s parry
+//  window; held RMB enters Block. N fires a fake incoming attack 0.5s later.
+//  When the fake hit lands: parry window open -> [PARRY] -> Riposte state;
+//  in Block -> [BLOCKED] + 50% stamina drain; else -> [DAMAGED].
 //
-//  WASD = camera-relative locomotion (any direction). Shift = sprint (intent
-//  tracked, drain lands Day 13). LMB = attack combo. Space = roll. Esc quits.
-//  Scroll wheel zooms in/out for camera feel-tuning.
+//  WASD = camera-relative move. Shift = sprint. LMB = light combo.
+//  Shift+LMB = heavy. Space = roll. RMB = block / tap to parry. Q = (Day 15).
+//  N = debug fake incoming attack. Esc quits.
 // =============================================================================
 
 #include "core/Camera.h"
@@ -33,9 +33,19 @@
 #include <filesystem>
 #include <string>
 
+namespace {
+// Day 14 fake-hit tunables. Phase 4 enemies will replace this with the
+// real damage event emitted by enemy AI. Damage = 20 is a midpoint between
+// Cultist Slash (8) and Lunge (12) — small enough that the 50% block drain
+// is a tap (10 stamina, ~12% of bar), big enough that ignoring the parry
+// would matter once HP exists.
+constexpr float kFakeHitDelay  = 0.5f;
+constexpr float kFakeHitDamage = 20.0f;
+}  // namespace
+
 int main(int /*argc*/, char* /*argv*/[]) {
     try {
-        std::printf("================ Vigil — Day 11 ================\n");
+        std::printf("================ Vigil — Day 14 ================\n");
 
         vigil::Window window(1440, 900, "Vigil");
         vigil::VulkanContext vk(window);
@@ -55,16 +65,18 @@ int main(int /*argc*/, char* /*argv*/[]) {
         vigil::Camera   camera;
         vigil::Player   player;
 
-        std::printf("[Vigil] WASD = move (camera-relative), Shift = sprint.\n");
-        std::printf("[Vigil] LMB = attack combo, Space = roll.\n");
-        std::printf("[Vigil] Mouse-look is always on. Scroll wheel = zoom. Esc to quit.\n");
+        std::printf("[Vigil] WASD = move, Shift = sprint, Space = roll.\n");
+        std::printf("[Vigil] LMB = light combo, Shift+LMB = heavy.\n");
+        std::printf("[Vigil] RMB hold = Block. RMB tap (within 0.15s of hit) = Parry -> Riposte.\n");
+        std::printf("[Vigil] N = fake incoming attack in 0.5s (debug). Esc to quit.\n");
 
         auto last_time = std::chrono::high_resolution_clock::now();
 
+        // Day 14: pending fake-hit timer. -1 = inactive. Set on N press to
+        // kFakeHitDelay, ticks down each frame, resolves when <=0.
+        float fake_hit_timer = -1.0f;
+
         while (!window.should_close()) {
-            // ImGui gets first dibs on every SDL event so its IO state stays
-            // in sync. Window's own switch consumes events for game logic
-            // afterwards.
             window.poll_events([](const SDL_Event& e) {
                 ImGui_ImplSDL3_ProcessEvent(&e);
             });
@@ -75,11 +87,7 @@ int main(int /*argc*/, char* /*argv*/[]) {
 
             const auto input = window.consume_input();
 
-            // Camera follow + mouse-look. Order: (a) re-pin pivot to the
-            // player's head BEFORE consuming mouse delta — keeps yaw/pitch
-            // updates relative to the current pivot, not lagged-by-one-frame.
-            // (b) Mouse-look unconditional now (no RMB gate). (c) Scroll
-            // zoom kept as camera-distance feel-tuner.
+            // Camera follow + mouse-look.
             camera.set_target(player.position() + glm::vec3(0.0f, 0.5f, 0.0f));
             if (input.mouse_dx != 0.0f || input.mouse_dy != 0.0f) {
                 camera.orbit(input.mouse_dx, input.mouse_dy);
@@ -88,19 +96,53 @@ int main(int /*argc*/, char* /*argv*/[]) {
                 camera.zoom(input.scroll_y);
             }
 
-            // Player owns the SM now. update() drives transitions, locomotion,
-            // Roll motion, and facing-slerp using the camera's basis.
+            // ----- Day 14 parry pipeline -----
+            // Order is load-bearing: tick window FIRST so a fresh RMB-press
+            // this frame catches an N-pressed-last-frame fake hit firing
+            // this frame. Then resolve incoming damage against the updated
+            // window. Then player.update() runs the SM with riposte_pending_
+            // already set from try_parry. No 1-frame latency anywhere.
+            player.tick_parry_window(dt, input);
+
+            // Schedule fake incoming hit. Late-overwrite is OK (latest N
+            // wins) — matches "I changed my mind, swing again."
+            if (input.n_pressed) {
+                fake_hit_timer = kFakeHitDelay;
+                std::printf("[FAKE-HIT] scheduled in %.2fs (dmg=%.0f)\n",
+                            kFakeHitDelay, kFakeHitDamage);
+            }
+
+            // Tick + resolve. Fire when crossing zero this frame.
+            if (fake_hit_timer > 0.0f) {
+                fake_hit_timer -= dt;
+                if (fake_hit_timer <= 0.0f) {
+                    fake_hit_timer = -1.0f;
+                    const bool parried = player.try_parry();
+                    if (parried) {
+                        std::printf("[PARRY] window=%.3fs dmg=%.0f -> Riposte\n",
+                                    vigil::Player::PARRY_WINDOW, kFakeHitDamage);
+                    } else if (player.state().id() == vigil::PlayerStateId::Block) {
+                        const float drain = kFakeHitDamage * 0.5f;
+                        player.absorb_block_hit(kFakeHitDamage);
+                        std::printf("[BLOCKED] dmg=%.0f stam_drain=%.0f\n",
+                                    kFakeHitDamage, drain);
+                    } else if (player.state().iframes_active()) {
+                        std::printf("[IFRAMES] absorbed dmg=%.0f (Roll active)\n",
+                                    kFakeHitDamage);
+                    } else {
+                        std::printf("[DAMAGED] dmg=%.0f (HP system in Phase 4)\n",
+                                    kFakeHitDamage);
+                    }
+                }
+            }
+            // ----- end Day 14 parry pipeline -----
+
+            // SM + locomotion. Consumes riposte_pending_ into pin.riposte
+            // and transitions to Riposte if applicable.
             player.update(dt, input, camera);
 
-            // Day 12 — Phase 3 hit detection against the single practice dummy.
-            // GDD §6 attack arc: 90° cone (45° half-angle), 2.0m reach, XZ only.
-            // One-shot per attack instance via PlayerState::attack_landed_ (reset
-            // on transition_to entry to Attack1/2/3). 0.10s Active * 60Hz = 6
-            // frames in the hot path so the flag is load-bearing for correctness.
-            //
-            // Cone direction: +Z-forward (Player.cpp Day 12 — the Day 11
-            // hypothesis is now confirmed, model rest pose faces +Z, not -Z).
-            // facing = (sin(yaw), 0, cos(yaw)) matches Player.cpp's atan2 path.
+            // Day 12 — outgoing hit detection against the practice dummy.
+            // Now fires for Light/Heavy/Riposte (all share AttackPhase::Active).
             {
                 const auto& st = player.state();
                 const bool active = (st.attack_phase() == vigil::AttackPhase::Active);
@@ -126,8 +168,6 @@ int main(int /*argc*/, char* /*argv*/[]) {
                 }
             }
 
-            // ImGui frame: NewFrame -> build UI -> Render. RenderDrawData
-            // happens inside renderer.draw_frame's command-buffer recording.
             ImGui_ImplVulkan_NewFrame();
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();

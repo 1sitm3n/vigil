@@ -30,6 +30,7 @@ constexpr float kCrossfadeDuration  = 0.2f;  // roadmap Day 9: 0.2s blend.
 constexpr float kRollTargetDuration = 0.5f;  // GDD §6: roll lasts 0.5s.
 constexpr float kAtkTargetDuration  = 0.8f;  // GDD §6: light atk 0.30+0.10+0.40s.
 constexpr float kHeavyTargetDuration = 1.4f; // GDD §6: heavy atk 0.55+0.15+0.70s.
+constexpr float kRiposteTargetDuration = 1.5f; // GDD §6: riposte 0.20+0.20+1.10s (Day 14).
 }  // namespace
 
 Renderer::Renderer(VulkanContext& vk,
@@ -177,6 +178,7 @@ void Renderer::load_animations() {
     load_slot(PlayerStateId::Roll,    "assets/characters/knight/anims/roll_forward.glb", true,  kRollTargetDuration);
     load_slot(PlayerStateId::Heavy,   "assets/characters/knight/anims/attack_v3.glb",    true,  kHeavyTargetDuration);
     load_slot(PlayerStateId::Block,   "assets/characters/knight/anims/block_idle.glb",   true,  0.0f);
+    load_slot(PlayerStateId::Riposte, "assets/characters/knight/anims/attack.glb",       true,  kRiposteTargetDuration);
 
     animator_.set_skeleton(mesh_.skeleton());
     // Snap-load Idle as the starting pose (no blend on first frame).
@@ -367,6 +369,16 @@ void Renderer::draw_debug_overlay(const Player& player_obj, float dt) {
     ImGui::PushStyleColor(ImGuiCol_PlotHistogram, IM_COL32(80, 200, 110, 255));
     ImGui::ProgressBar(stam.fraction(), ImVec2(180, 0), "");
     ImGui::PopStyleColor();
+
+    // Day 14: parry window indicator. Renders only while > 0 — short
+    // burst (max 150ms) so the panel stays clean otherwise. Useful for
+    // tuning the press-to-hit timing window.
+    const float pw = player_obj.parry_window_remaining();
+    if (pw > 0.0f) {
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 220, 90, 255));
+        ImGui::Text("PARRY    %.3f s", pw);
+        ImGui::PopStyleColor();
+    }
 
     ImGui::Separator();
     const glm::vec3 pp = player_obj.position();

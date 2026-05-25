@@ -22,11 +22,6 @@ Window::Window(int width, int height, const std::string& title)
         throw std::runtime_error(std::string{"SDL_CreateWindow failed: "} + SDL_GetError());
     }
 
-    // Day 11: relative-mouse mode on for the session. Cursor is hidden and
-    // centered each frame; motion arrives as event.motion.xrel/yrel and
-    // feeds Camera::orbit unconditionally (no RMB gate). Focus-lost / gained
-    // events toggle the mode so Cmd-Tab away and back doesn't leave the
-    // cursor stuck in the void.
     SDL_SetWindowRelativeMouseMode(window_, true);
 }
 
@@ -38,8 +33,6 @@ Window::~Window() {
 void Window::poll_events(const EventCallback& on_event) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
-        // ImGui (or any other observer) gets first dibs on the raw event,
-        // before our switch consumes it.
         if (on_event) on_event(event);
 
         switch (event.type) {
@@ -48,13 +41,15 @@ void Window::poll_events(const EventCallback& on_event) {
                 break;
 
             case SDL_EVENT_KEY_DOWN:
-                // SDL3 fires KEY_DOWN once on initial press, then again at
-                // the OS repeat rate with .repeat = true. Edge triggers
-                // reject the repeats so Space doesn't queue a stream of rolls.
+                // SDL3 fires KEY_DOWN once on press then again at OS repeat
+                // rate with .repeat = true. Edge triggers reject repeats so
+                // Space doesn't queue rolls and N doesn't queue fake-hits.
                 if (event.key.key == SDLK_ESCAPE) {
                     should_close_ = true;
                 } else if (event.key.key == SDLK_SPACE && !event.key.repeat) {
                     pending_space_press_ = true;
+                } else if (event.key.key == SDLK_N && !event.key.repeat) {
+                    pending_n_press_ = true;
                 }
                 break;
 
@@ -63,9 +58,6 @@ void Window::poll_events(const EventCallback& on_event) {
                 height_ = event.window.data2;
                 break;
 
-            // Day 11: cursor release/regain on focus boundaries. Without
-            // this, Cmd-Tab leaves the cursor invisible AND captured —
-            // user has to alt-F4 to recover.
             case SDL_EVENT_WINDOW_FOCUS_LOST:
                 SDL_SetWindowRelativeMouseMode(window_, false);
                 break;
@@ -75,8 +67,12 @@ void Window::poll_events(const EventCallback& on_event) {
                 break;
 
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                // BUTTON_DOWN fires exactly once per press (not per held
+                // frame), so setting both held + pressed here works for
+                // edge detection without separate prev-state tracking.
                 if (event.button.button == SDL_BUTTON_RIGHT) {
-                    rmb_down_ = true;  // tracked; no longer toggles cursor mode
+                    rmb_down_           = true;
+                    pending_rmb_press_  = true;   // Day 14: parry edge
                 } else if (event.button.button == SDL_BUTTON_LEFT) {
                     pending_lmb_press_ = true;
                 }
@@ -89,8 +85,6 @@ void Window::poll_events(const EventCallback& on_event) {
                 break;
 
             case SDL_EVENT_MOUSE_MOTION:
-                // Day 11: accumulate unconditionally. Relative-mouse mode
-                // is on for the session, so xrel/yrel are valid at all times.
                 pending_mouse_dx_ += event.motion.xrel;
                 pending_mouse_dy_ += event.motion.yrel;
                 break;
@@ -111,14 +105,18 @@ InputFrame Window::consume_input() {
     frame.mouse_dy      = pending_mouse_dy_;
     frame.scroll_y      = pending_scroll_y_;
     frame.rmb_held      = rmb_down_;
+    frame.rmb_pressed   = pending_rmb_press_;
     frame.lmb_pressed   = pending_lmb_press_;
     frame.space_pressed = pending_space_press_;
+    frame.n_pressed     = pending_n_press_;
 
     pending_mouse_dx_    = 0.0f;
     pending_mouse_dy_    = 0.0f;
     pending_scroll_y_    = 0.0f;
     pending_lmb_press_   = false;
+    pending_rmb_press_   = false;
     pending_space_press_ = false;
+    pending_n_press_     = false;
 
     const bool* keys = SDL_GetKeyboardState(nullptr);
     frame.w_held     = keys[SDL_SCANCODE_W];
