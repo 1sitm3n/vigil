@@ -16,6 +16,15 @@ namespace vigil {
 // (or just before) Block. Mirrors Heavy's phase machine with riposte frame
 // data (0.20/0.20/1.10 = 1.5s budget, GDD §6). Terminal — no combo chain,
 // NOT roll-cancellable.
+//
+// Day 15: Cast (10) added. Holy Bolt cast state. 0.8s budget total
+// (0.55 startup + 0.10 active + 0.15 recovery, GDD §6). Active frame spawns
+// the projectile (main.cpp watches AttackPhase::Active here, same single-
+// shot gate as attack_landed_). Terminal — no combo, NOT roll-cancellable.
+// Cancellable by INCOMING DAMAGE only, via PlayerState::cancel_cast() —
+// Player::cancel_cast_with_refund() owns the 50% Faith refund (GDD §6).
+// Phase 4 enemies will hook the cancel; Day 15 uses the N-key fake-hit
+// dispatcher to verify the contract.
 enum class PlayerStateId : uint8_t {
     Idle    = 0,
     Walk    = 1,
@@ -27,10 +36,11 @@ enum class PlayerStateId : uint8_t {
     Heavy   = 7,
     Block   = 8,
     Riposte = 9,
-    Count   = 10
+    Cast    = 10,
+    Count   = 11
 };
 
-// Sub-phase within attack states. None outside of Attack1/2/3/Heavy/Riposte.
+// Sub-phase within attack states. None outside of Attack1/2/3/Heavy/Riposte/Cast.
 enum class AttackPhase : uint8_t {
     None,
     Startup,
@@ -38,12 +48,13 @@ enum class AttackPhase : uint8_t {
     Recovery,
 };
 
-// Edge-triggered for tap inputs (attack, heavy_attack, dodge, riposte);
+// Edge-triggered for tap inputs (attack, heavy_attack, dodge, riposte, cast);
 // held for movement (forward, sprint, block). Player.cpp builds this from
 // Window's InputFrame each frame.
 //
 // Day 14: riposte is set by Player when try_parry() consumes the window;
 // it propagates through update() into the SM exactly once per parry.
+// Day 15: cast is set by Player from q_pressed edge when faith.available(BOLT_COST).
 struct PlayerInput {
     bool move_forward = false;  // W/A/S/D held
     bool sprint       = false;  // Shift held AND stamina > 0
@@ -52,13 +63,14 @@ struct PlayerInput {
     bool dodge        = false;  // Space pressed, stamina >= 25
     bool block        = false;  // RMB held
     bool riposte      = false;  // Day 14: parry consumed; transition to Riposte
+    bool cast         = false;  // Day 15: Q pressed, faith >= 20; transition to Cast
 };
 
 // String labels for debug overlay rendering.
 const char* to_string(PlayerStateId id);
 const char* to_string(AttackPhase   phase);
 
-// Phase 2/3 player state machine — Idle/Walk/Jog/Attack1-3/Roll/Heavy/Block/Riposte.
+// Phase 2/3 player state machine — Idle/Walk/Jog/Attack1-3/Roll/Heavy/Block/Riposte/Cast.
 //
 // Timing is GDD §6 canonical, not animation duration:
 //   light:   startup 0.30s | active 0.10s | recovery 0.40s
@@ -67,16 +79,25 @@ const char* to_string(AttackPhase   phase);
 //            no combo; roll-cancellable in recovery
 //   riposte: startup 0.20s | active 0.20s | recovery 1.10s = 1.5s budget
 //            no combo; NOT roll-cancellable (terminal)
+//   cast:    startup 0.55s | active 0.10s | recovery 0.15s = 0.8s budget
+//            no combo; NOT roll-cancellable; INTERRUPTIBLE BY DAMAGE
+//            (cancel_cast() called by Player on hit, refunds 50% Faith)
 //   roll:    0.50s total, i-frames 0.10s -> 0.35s
 //   block:   no timer; held while in.block, exits to default_locomotion
 //
 // Input buffering: LMB during startup/active is buffered, consumed at
-// recovery start to chain. LIGHT ONLY — heavy and riposte are single-hit.
+// recovery start to chain. LIGHT ONLY — heavy, riposte, cast are single-hit.
 class PlayerState {
 public:
     PlayerState() = default;
 
     void update(float dt, const PlayerInput& input);
+
+    // Day 15: external interrupt hook. Player::cancel_cast_with_refund()
+    // calls this after refunding 50% Faith. No-op if not in Cast. Phase 4
+    // enemies route their damage events through Player; Day 15 uses the
+    // N-key fake-hit dispatcher.
+    void cancel_cast();
 
     PlayerStateId id()              const { return state_; }
     AttackPhase   attack_phase()    const { return phase_; }
@@ -111,6 +132,14 @@ private:
     static constexpr float RIPOSTE_STARTUP  = 0.20f;
     static constexpr float RIPOSTE_ACTIVE   = 0.20f;
     static constexpr float RIPOSTE_RECOVERY = 1.10f;
+
+    // Cast frame data — 0.8s budget total (GDD §6). 0.55s startup sells the
+    // wind-up (hand raises, sigil forms); 0.10s active is the bolt release —
+    // main.cpp's projectile-spawn watches AttackPhase::Active here, single-
+    // shot via the attack_landed_ gate; 0.15s recovery is just the settle.
+    static constexpr float CAST_STARTUP   = 0.55f;
+    static constexpr float CAST_ACTIVE    = 0.10f;
+    static constexpr float CAST_RECOVERY  = 0.15f;
 
     // Roll (GDD §6).
     static constexpr float ROLL_DURATION  = 0.50f;

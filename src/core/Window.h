@@ -30,6 +30,7 @@ struct InputFrame {
     bool  lmb_pressed   = false;
     bool  space_pressed = false;
     bool  n_pressed     = false;   // Day 14: debug fake-hit trigger
+    bool  q_pressed     = false;   // Day 15: Holy Bolt cast trigger
 };
 
 using EventCallback = std::function<void(const SDL_Event&)>;
@@ -70,6 +71,7 @@ private:
     bool  pending_rmb_press_   = false;   // Day 14
     bool  pending_space_press_ = false;
     bool  pending_n_press_     = false;   // Day 14
+    bool  pending_q_press_     = false;   // Day 15
 };
 
 }  // namespace vigil

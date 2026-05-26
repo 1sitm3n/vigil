@@ -1287,3 +1287,152 @@
 - Day 13: heavy + block + stamina (shipped)
 - Day 14: parry + riposte (shipped)
 - Day 15: holy bolt + faith + Phase 3 checkpoint (today)
+
+## Day 15 — 2026-05-26 — Holy Bolt, Faith, Phase 3 checkpoint
+
+**Shipped:**
+- src/game/Faith.h: header-only resource, structural clone of Stamina with
+  GDD section 6/7 constants. MAX_VALUE 60, REGEN_RATE 5/s, BOLT_COST 20.
+  refund(amount) method for the 50% damage-cancel path. NO spending
+  exclusion list - Faith regens always, unlike Stamina which pauses during
+  attack/block/sprint. Cast's drain on entry IS the spending event
+- src/game/PlayerState: Cast=10, Count=11. Frame data 0.55 startup + 0.10
+  active + 0.15 recovery = 0.8s budget (GDD section 6). is_cast branch in
+  update_attack joins is_heavy and is_riposte; dodge-gate clauses on
+  (is_riposte || is_cast) keep Cast terminal. cancel_cast() external
+  interrupt: Player::cancel_cast_with_refund routes damage events through it
+- src/game/Player: Faith member + accessor + cancel_cast_with_refund (refund
+  50% of BOLT_COST then route to PlayerState::cancel_cast). pin.cast wired
+  from input.q_pressed gated by faith_.available(BOLT_COST). Drain on Cast
+  entry; Faith ticks regen 5/s always. try_parry signature changed to return
+  float (Day 14 cosmetic carry resolved): logs caught_at value at consume
+  rather than the static PARRY_WINDOW constant
+- src/core/Window: q_pressed edge field in InputFrame. pending_q_press_
+  private. SDLK_Q with repeat-guard in KEY_DOWN handler, mirror of SDLK_N
+- src/render/Renderer: Cast slot 10 loads casting.glb (native 2.967s,
+  compressed 3.708x to 0.8s GDD budget - fast, Phase 6 may relax). Blue
+  Faith bar (110,160,220 per GDD section 15.2) under green Stamina bar in
+  debug overlay, no separator (tight resource cluster). draw_frame +
+  record_command_buffer take const std::vector<Projectile>&. Per-projectile
+  draw loop reuses dummy_mesh_'s vertex/index bindings (Vulkan persists
+  bindings within a command buffer) + slot-127 identity-skin trick + per-
+  projectile MVP push. Visual scale 0.30m cube (DRAW_HALF_EXTENT * 2)
+- src/game/Projectile.{h,cpp}: pre-existed from a past-tab session, kept as
+  authored. Struct + free function update_projectile() with weak 30 degree
+  cone homing (lerp + renormalize, cheaper than slerp at small per-tick
+  angles), 3s lifetime cap, BOLT_SPEED 18, BOLT_DAMAGE 50, HOMING_RATE_DEG_S
+  60. Visual vs hit half-extents separated (0.15 vs 0.5)
+- src/main.cpp: std::vector<Projectile> pool in main scope. Spawn block on
+  Cast Active (single-shot via attack_landed_ gate, same gate the combo
+  uses for melee single-fire). [CAST-CANCEL] branch in fake-hit dispatcher
+  - 50% Faith refund + cancel_cast routing. Cone test gated off Cast using
+  positive-sense booleans (melee, fresh, can_fire) instead of !-prefix to
+  dodge a zsh paste edge case where bracketed paste fails on large
+  buffers and the line-editor history-expands !identifier patterns mid-
+  paste, aborting the whole heredoc. Tick + AABB vs dummy + remove_if cull.
+  draw_frame call now passes projectiles
+
+**Broken / pending:**
+- 1m bind-pose / checker tex / backface bleed - Day 7 carry. NOW BLOCKING
+  for Phase 4 (arena pieces at proper 3m wall scale will dwarf a 1m knight
+  by 2x). Week 4 Blender re-upload at 1.8m scale + re-pull all Mixamo anims
+- Mid-blend pose-pop on chain-spam - Day 9 carry, deferred
+- Body rotation tied to wish_dir - Day 11 design call, defer to Phase 4
+  strafe anims
+- Stale /usr/local/share/vulkan dup-layer warnings, Day 1 carry
+- Block stance-locks all movement - Day 13 carry
+- Roll allows regen during the 0.5s i-frame window - Day 13 carry
+- casting.glb 3.708x compression is visibly frantic. Phase 6 polish either
+  swaps to casting_v2.glb (if native is shorter) or relaxes the budget,
+  though GDD section 6 spec is 0.8s
+- main.cpp uses positive-sense booleans (melee, fresh, can_fire, p.alive ==
+  false) instead of !-prefix idioms for zsh-paste safety. Stylistic
+  awkwardness; reversible with setopt no_bang_hist in shell session or
+  smaller pastes that stay inside bracketed-paste buffer limits
+
+**Notes for tomorrow:**
+- Day 16 per roadmap: arena environment. Tripo generation for ruined keep
+  walls (5-7 modular at 4m grid), broken altar centerpiece, 3 broken
+  pillars, brazier (instance x4), 3 dead trees, 5 rocks. ~2hr Tripo time
+- Blender pass: lay pieces into 80x80m courtyard per GDD section 11.
+  Export as arena.glb (or a few files if heavy)
+- Engine: load arena.glb, render it, place knight at south breach. Tune
+  scale - walls ~3m vs knight 1.8m
+- THE BIND-POSE CARRY IS NOW UNAVOIDABLE. Three paths:
+  (a) Re-upload knight at proper 1.8m scale in Blender, re-pull all Mixamo
+      anims via the Tripo+Mixamo pipeline doc. 1-2hr task. Cleanest
+  (b) Scale knight 1.8x at runtime in Player::world_transform. Quick but
+      means roll-distance, attack-arc, AABB-radius constants drift
+  (c) Author arena at 1m-knight scale (1.7m walls instead of 3m). Defers
+      forever; will bite the Pale Sovereign at 1.4x runtime scale even harder
+- Current Mesh class loads one primitive from one .glb. arena.glb will have
+  many primitives + may need multi-mesh support. Either extend Mesh to
+  iterate cgltf primitives or add a Scene/Model class holding multiple
+  Mesh + Transform pairs
+
+## Handoff to Day 16 instance
+
+**State at end of Day 15 (Phase 3 complete):**
+- All player combat mechanics work against the practice dummy: light combo
+  (Attack1/2/3), heavy attack, block, parry into riposte (60 dmg), roll
+  with i-frames (0.10-0.35s window), holy bolt (50 dmg, 18 m/s, weak 30
+  degree cone homing). Damage dispatcher routes PARRY -> BLOCKED -> IFRAMES
+  -> CAST-CANCEL -> DAMAGED in main.cpp. Phase 4 enemies replace the
+  fake-hit timer with real events; the contract stays identical
+- Resource economies operational. Stamina 100 max, regen 25/s except
+  attack/block/sprint. Faith 60 max, regen 5/s always. Costs per GDD
+  section 6: light 12 / heavy 24 / roll 25 / bolt 20
+- PlayerStateId has 11 states (Idle/Walk/Jog/Attack1/2/3/Roll/Heavy/Block/
+  Riposte/Cast). 1:1 mapping to Renderer::anim_slots_ via PlayerStateId::
+  Count sentinel - adding a state = adding an animation slot
+- Projectile pool is a vector<Projectile> in main scope. Day 15 only
+  targets the practice dummy via &Renderer::DUMMY_POSITION pointer; Phase 4
+  enemies will populate a target list and main picks nearest-in-cone at
+  spawn
+
+**Day 16 work (per roadmap Phase 4 kickoff):**
+- Tripo generation for arena: walls (5-7 modular pieces, 4m grid), altar
+  (hero centerpiece), 3 pillars, 1 brazier (will be instanced 4x),
+  3 dead trees, 5 rocks
+- Blender layout pass per GDD section 11: 80x80m courtyard with the altar
+  centered, 4 braziers cardinal around it, broken walls forming the outer
+  ring, south breach for the approach
+- Engine: extend Mesh or add Scene class for multi-primitive arena.glb.
+  Render. Place knight at south breach (~40m south of altar)
+- Resolve 1m bind-pose - see Notes for tomorrow above for the three paths
+
+**Files the next instance will need on turn 1:**
+- src/render/Mesh.{h,cpp} - currently loads one primitive from one .glb.
+  May need extension or replacement for the arena
+- src/render/Renderer.{h,cpp} - create_mesh path is currently knight-only.
+  Add arena loading. record_command_buffer will need per-arena-piece draw
+  calls or a scenegraph traversal
+- src/game/Player.{h,cpp} - position/world_transform/scale. If runtime
+  scaling is the bind-pose fix, this is the lever
+- assets/characters/knight/knight.glb - the bind-pose carry. May get
+  re-uploaded at 1.8m scale + re-rigged + re-anim'd
+- docs/vigil_tripo_mixamo_pipeline.md - the canonical reference for the
+  Tripo + Mixamo workflow; arena pieces follow the environment-asset path
+  (steps 1+2 only, no rigging)
+
+**Watch for:**
+- arena.glb size + complexity. Modular walls authored separately and laid
+  out in Blender give one big .glb, but if Tripo outputs each piece as a
+  separate file, layout may need to happen in code (transforms per piece).
+  GDD section 11 has the topology
+- Camera bounds. Current third-person orbit doesn't clip against arena
+  geometry. Walking near a wall will probably push the camera through it.
+  Phase 4 sprint goal vs nice-to-have - flag as a Day 17 lighting+ECS
+  concern, not Day 16
+- Scale arithmetic. If knight at 1m and walls at 3m, the ratio reads as
+  walls being 6m vs a 2m human. Wrong eye-line. Either resolve bind-pose
+  or scale arena down to 1.7m walls
+
+**Phase 4 plan reminder (Week 4):**
+- Day 16: arena environment + layout (today)
+- Day 17: ECS (entt single-header) + lighting (CSM + brazier point lights)
+- Day 18: Cultist enemy (Tripo + Mixamo pipeline run, 2nd character)
+- Day 19: Wraith enemy (pipeline run, 3rd character)
+- Day 20: Wave manager + waves 1-6, Phase 4 checkpoint
+- Pale Sovereign + Phase 5 are Week 5
+

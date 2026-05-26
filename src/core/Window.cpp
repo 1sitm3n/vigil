@@ -50,6 +50,8 @@ void Window::poll_events(const EventCallback& on_event) {
                     pending_space_press_ = true;
                 } else if (event.key.key == SDLK_N && !event.key.repeat) {
                     pending_n_press_ = true;
+                } else if (event.key.key == SDLK_Q && !event.key.repeat) {
+                    pending_q_press_ = true;
                 }
                 break;
 
@@ -109,6 +111,7 @@ InputFrame Window::consume_input() {
     frame.lmb_pressed   = pending_lmb_press_;
     frame.space_pressed = pending_space_press_;
     frame.n_pressed     = pending_n_press_;
+    frame.q_pressed     = pending_q_press_;
 
     pending_mouse_dx_    = 0.0f;
     pending_mouse_dy_    = 0.0f;
@@ -117,6 +120,7 @@ InputFrame Window::consume_input() {
     pending_rmb_press_   = false;
     pending_space_press_ = false;
     pending_n_press_     = false;
+    pending_q_press_     = false;
 
     const bool* keys = SDL_GetKeyboardState(nullptr);
     frame.w_held     = keys[SDL_SCANCODE_W];

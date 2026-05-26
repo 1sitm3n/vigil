@@ -1,19 +1,24 @@
 // =============================================================================
-//  Vigil — Day 14
-//  Phase 3 continues: parry + riposte. RMB edge press opens a 0.15s parry
-//  window; held RMB enters Block. N fires a fake incoming attack 0.5s later.
-//  When the fake hit lands: parry window open -> [PARRY] -> Riposte state;
-//  in Block -> [BLOCKED] + 50% stamina drain; else -> [DAMAGED].
+//  Vigil — Day 15  (Phase 3 closer)
+//
+//  Holy Bolt spell + Faith resource. Q triggers a 0.8s cast (lock-in-place,
+//  no roll-cancel, interruptible by damage). On Cast::Active, spawn one
+//  projectile at 18 m/s toward the dummy with weak 30 degree cone homing.
+//  Projectile pool lives here; renderer.draw_frame takes it as a param.
+//  N during Cast = [CAST-CANCEL] with 50% Faith refund. Phase 4 enemies
+//  will replace the fake-hit dispatcher with real damage events.
 //
 //  WASD = camera-relative move. Shift = sprint. LMB = light combo.
-//  Shift+LMB = heavy. Space = roll. RMB = block / tap to parry. Q = (Day 15).
-//  N = debug fake incoming attack. Esc quits.
+//  Shift+LMB = heavy. Space = roll. RMB = block / tap to parry.
+//  Q = Holy Bolt cast. N = debug fake incoming attack. Esc quits.
 // =============================================================================
 
 #include "core/Camera.h"
 #include "core/Window.h"
 #include "core/VulkanContext.h"
+#include "game/Faith.h"
 #include "game/Player.h"
+#include "game/Projectile.h"
 #include "render/Swapchain.h"
 #include "render/GraphicsPipeline.h"
 #include "render/Renderer.h"
@@ -26,12 +31,14 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <exception>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace {
 // Day 14 fake-hit tunables. Phase 4 enemies will replace this with the
@@ -41,11 +48,18 @@ namespace {
 // would matter once HP exists.
 constexpr float kFakeHitDelay  = 0.5f;
 constexpr float kFakeHitDamage = 20.0f;
+
+// Day 15: bolt spawn offset - chest height above player origin. Knight's
+// 1m bind-pose runs y from -0.499 to +0.499 (see [Mesh] bounds at startup);
+// 0.25 is mid-chest. Grows to ~0.5 once Week-4 Blender re-upload puts the
+// model at proper 1.8m scale. Bolts travel horizontally so this single Y
+// value defines the firing line.
+constexpr float kBoltSpawnY = 0.25f;
 }  // namespace
 
 int main(int /*argc*/, char* /*argv*/[]) {
     try {
-        std::printf("================ Vigil — Day 14 ================\n");
+        std::printf("================ Vigil — Day 15 ================\n");
 
         vigil::Window window(1440, 900, "Vigil");
         vigil::VulkanContext vk(window);
@@ -65,10 +79,16 @@ int main(int /*argc*/, char* /*argv*/[]) {
         vigil::Camera   camera;
         vigil::Player   player;
 
+        // Day 15: projectile pool. Bolts live here; renderer reads it; main
+        // ticks + culls. One bolt per ~0.8s cast, lifetime 3s = max ~4
+        // concurrent; vector-of-POD + remove_if cull is fine until Phase 4
+        // enemies start firing back en masse.
+        std::vector<vigil::Projectile> projectiles;
+
         std::printf("[Vigil] WASD = move, Shift = sprint, Space = roll.\n");
         std::printf("[Vigil] LMB = light combo, Shift+LMB = heavy.\n");
         std::printf("[Vigil] RMB hold = Block. RMB tap (within 0.15s of hit) = Parry -> Riposte.\n");
-        std::printf("[Vigil] N = fake incoming attack in 0.5s (debug). Esc to quit.\n");
+        std::printf("[Vigil] Q = Holy Bolt cast (20 Faith). N = fake incoming attack. Esc to quit.\n");
 
         auto last_time = std::chrono::high_resolution_clock::now();
 
@@ -117,10 +137,10 @@ int main(int /*argc*/, char* /*argv*/[]) {
                 fake_hit_timer -= dt;
                 if (fake_hit_timer <= 0.0f) {
                     fake_hit_timer = -1.0f;
-                    const bool parried = player.try_parry();
-                    if (parried) {
-                        std::printf("[PARRY] window=%.3fs dmg=%.0f -> Riposte\n",
-                                    vigil::Player::PARRY_WINDOW, kFakeHitDamage);
+                    const float caught = player.try_parry();
+                    if (caught > 0.0f) {
+                        std::printf("[PARRY] caught_at=%.3fs dmg=%.0f -> Riposte\n",
+                                    caught, kFakeHitDamage);
                     } else if (player.state().id() == vigil::PlayerStateId::Block) {
                         const float drain = kFakeHitDamage * 0.5f;
                         player.absorb_block_hit(kFakeHitDamage);
@@ -129,6 +149,15 @@ int main(int /*argc*/, char* /*argv*/[]) {
                     } else if (player.state().iframes_active()) {
                         std::printf("[IFRAMES] absorbed dmg=%.0f (Roll active)\n",
                                     kFakeHitDamage);
+                    } else if (player.state().id() == vigil::PlayerStateId::Cast) {
+                        // Day 15: incoming damage during Cast = cancel + 50%
+                        // Faith refund (GDD section 6). Phase 4 enemies will
+                        // replace this branch with the real damage event but
+                        // the contract stays identical.
+                        const float refund = vigil::Faith::BOLT_COST * 0.5f;
+                        player.cancel_cast_with_refund();
+                        std::printf("[CAST-CANCEL] dmg=%.0f faith_refund=%.0f\n",
+                                    kFakeHitDamage, refund);
                     } else {
                         std::printf("[DAMAGED] dmg=%.0f (HP system in Phase 4)\n",
                                     kFakeHitDamage);
@@ -141,12 +170,48 @@ int main(int /*argc*/, char* /*argv*/[]) {
             // and transitions to Riposte if applicable.
             player.update(dt, input, camera);
 
-            // Day 12 — outgoing hit detection against the practice dummy.
-            // Now fires for Light/Heavy/Riposte (all share AttackPhase::Active).
+            // Day 15: projectile spawn on Cast Active (single-shot per cast).
+            // attack_landed_ already gates single-fire for melee combos;
+            // reuse the gate here. register_hit() sets the flag so
+            // subsequent Active ticks within this Cast are no-ops. The flag
+            // resets on the next state transition.
+            {
+                const auto& st = player.state();
+                const bool cast_active = (st.id() == vigil::PlayerStateId::Cast &&
+                                          st.attack_phase() == vigil::AttackPhase::Active);
+                const bool can_fire    = (st.attack_landed() == false);
+                if (cast_active && can_fire) {
+                    const float yaw = player.yaw();
+                    const glm::vec3 facing(std::sin(yaw), 0.0f, std::cos(yaw));
+                    const glm::vec3 spawn_pos =
+                        player.position() + glm::vec3(0.0f, kBoltSpawnY, 0.0f);
+
+                    vigil::Projectile bolt;
+                    bolt.position           = spawn_pos;
+                    bolt.velocity           = facing * vigil::Projectile::BOLT_SPEED;
+                    bolt.lifetime_remaining = vigil::Projectile::MAX_LIFETIME;
+                    bolt.alive              = true;
+                    bolt.target             = &vigil::Renderer::DUMMY_POSITION;
+                    projectiles.push_back(bolt);
+                    player.register_hit();
+                    std::printf("[BOLT] spawned pos=%.2f,%.2f,%.2f  vel=%.2f m/s  -> dummy\n",
+                                spawn_pos.x, spawn_pos.y, spawn_pos.z,
+                                vigil::Projectile::BOLT_SPEED);
+                }
+            }
+
+            // Day 12 cone hit detection (Light/Heavy/Riposte against dummy).
+            // Day 15: gated off Cast - Cast Active is the bolt-spawn event,
+            // not a melee swing. Without this gate the player got spurious
+            // [HIT] Cast lines any time they cast within 2m of the dummy.
+            // Booleans named in positive sense (fresh, melee) to dodge zsh
+            // history expansion on !identifier patterns during paste.
             {
                 const auto& st = player.state();
                 const bool active = (st.attack_phase() == vigil::AttackPhase::Active);
-                if (active && !st.attack_landed()) {
+                const bool fresh  = (st.attack_landed() == false);
+                const bool melee  = (st.id() != vigil::PlayerStateId::Cast);
+                if (active && fresh && melee) {
                     const glm::vec3 d_xz(
                         vigil::Renderer::DUMMY_POSITION.x - player.position().x,
                         0.0f,
@@ -168,13 +233,40 @@ int main(int /*argc*/, char* /*argv*/[]) {
                 }
             }
 
+            // Day 15: tick projectiles, AABB-test vs dummy, cull dead.
+            // update_projectile() (Projectile.cpp) handles integration +
+            // weak 30 degree cone homing + lifetime decay. main owns hit
+            // detection because the target list is currently main's
+            // responsibility; Phase 4 hands this to an enemy system.
+            for (auto& proj : projectiles) {
+                if (proj.alive == false) continue;
+                vigil::update_projectile(proj, dt);
+                if (proj.alive == false) continue;
+
+                const glm::vec3& dp = vigil::Renderer::DUMMY_POSITION;
+                const float r       = vigil::Projectile::HIT_HALF_EXTENT;
+                if (std::abs(proj.position.x - dp.x) <= r &&
+                    std::abs(proj.position.y - dp.y) <= r &&
+                    std::abs(proj.position.z - dp.z) <= r) {
+                    std::printf("[BOLT HIT] dmg=%.0f at %.2f,%.2f,%.2f\n",
+                                vigil::Projectile::BOLT_DAMAGE,
+                                proj.position.x, proj.position.y, proj.position.z);
+                    proj.alive = false;
+                }
+            }
+            projectiles.erase(
+                std::remove_if(projectiles.begin(), projectiles.end(),
+                               [](const vigil::Projectile& q) { return q.alive == false; }),
+                projectiles.end()
+            );
+
             ImGui_ImplVulkan_NewFrame();
             ImGui_ImplSDL3_NewFrame();
             ImGui::NewFrame();
             renderer.draw_debug_overlay(player, dt);
             ImGui::Render();
 
-            renderer.draw_frame(camera, player);
+            renderer.draw_frame(camera, player, projectiles);
         }
 
         renderer.wait_idle();

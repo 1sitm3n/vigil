@@ -3,6 +3,7 @@
 #include "core/Window.h"        // InputFrame
 #include "game/PlayerState.h"
 #include "game/Stamina.h"
+#include "game/Faith.h"
 
 #include <glm/glm.hpp>
 
@@ -18,13 +19,20 @@ class Camera;
 // per-frame work explicitly:
 //
 //   1) player.tick_parry_window(dt, input)   // window decay + edge refresh
-//   2) [if fake-hit fires] player.try_parry() or absorb_block_hit() or print
-//   3) player.update(dt, input, camera)      // SM consumes riposte_pending_
+//   2) [if fake-hit fires] player.try_parry() or absorb_block_hit() or
+//      player.cancel_cast_with_refund() (Day 15) or print [DAMAGED]
+//   3) player.update(dt, input, camera)      // SM consumes riposte_pending_;
+//                                            // pin.cast latched from q_pressed
 //
 // The split lets damage resolution see a current window value AND lets the
 // SM consume riposte_pending_ in the same frame as the parry — no 1-frame
 // latency. Phase 4 enemies will replace main.cpp's fake-hit timer with the
 // real damage event but the contract here stays identical.
+//
+// Day 15: also owns Faith. Q press + faith.available(BOLT_COST) → pin.cast →
+// SM transitions to Cast. Drain 20 on Cast entry. Cast is interruptible by
+// incoming damage; cancel_cast_with_refund() refunds 50% Faith (10) and
+// bounces the SM out of Cast (GDD §6).
 class Player {
 public:
     Player() = default;
@@ -33,15 +41,20 @@ public:
     // BEFORE update() each frame.
     void tick_parry_window(float dt, const InputFrame& input);
 
-    // Day 14: incoming-damage hooks. Both called by main.cpp when the
-    // fake-hit timer fires (Phase 4 enemies will be the real callers).
+    // Day 14/15: incoming-damage hooks called by main.cpp when the fake-hit
+    // timer fires (Phase 4 enemies will be the real callers).
     //
-    // try_parry: returns true if parry window is open. Consumes the window
-    //            and sets riposte_pending_ which next update() feeds to the
-    //            SM as pin.riposte. No stamina cost.
-    // absorb_block_hit: drain 50% of damage from stamina (GDD §6).
-    bool try_parry();
-    void absorb_block_hit(float damage);
+    // try_parry:          returns remaining-at-consume window in seconds if
+    //                     a parry caught the hit, or 0.0f otherwise. Consumes
+    //                     the window and sets riposte_pending_ which next
+    //                     update() feeds to the SM as pin.riposte.
+    // absorb_block_hit:   drain 50% of damage from stamina (GDD §6).
+    // cancel_cast_w/refund (Day 15): refund 50% Faith and bounce the SM out
+    //                     of Cast (GDD §6). No-op when not in Cast — safe to
+    //                     call from any damage-handling path.
+    float try_parry();
+    void  absorb_block_hit(float damage);
+    void  cancel_cast_with_refund();
 
     // Drives SM, camera-relative locomotion, Roll motion, facing-slerp.
     void update(float dt, const InputFrame& input, const Camera& camera);
@@ -51,6 +64,7 @@ public:
     float              yaw()      const { return yaw_facing_; }   // radians
     const PlayerState& state()    const { return state_; }
     const Stamina&     stamina()  const { return stamina_; }
+    const Faith&       faith()    const { return faith_; }
     float              parry_window_remaining() const { return parry_window_remaining_; }
 
     glm::mat4 world_transform() const;
@@ -67,6 +81,7 @@ public:
 private:
     PlayerState state_;
     Stamina     stamina_;
+    Faith       faith_;
     glm::vec3   position_   { 0.0f, 0.0f, 0.0f };
     glm::vec3   velocity_   { 0.0f, 0.0f, 0.0f };
     // Day 12: model faces +Z at yaw=0 (NOT Mixamo's standard -Z — Tripo

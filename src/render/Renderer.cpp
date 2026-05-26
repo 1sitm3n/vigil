@@ -6,6 +6,7 @@
 #include "core/Camera.h"
 #include "core/Window.h"
 #include "game/Player.h"
+#include "game/Faith.h"
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
@@ -31,6 +32,7 @@ constexpr float kRollTargetDuration = 0.5f;  // GDD §6: roll lasts 0.5s.
 constexpr float kAtkTargetDuration  = 0.8f;  // GDD §6: light atk 0.30+0.10+0.40s.
 constexpr float kHeavyTargetDuration = 1.4f; // GDD §6: heavy atk 0.55+0.15+0.70s.
 constexpr float kRiposteTargetDuration = 1.5f; // GDD §6: riposte 0.20+0.20+1.10s (Day 14).
+constexpr float kCastTargetDuration    = 0.8f; // GDD §6: cast 0.55+0.10+0.15s (Day 15).
 }  // namespace
 
 Renderer::Renderer(VulkanContext& vk,
@@ -179,6 +181,7 @@ void Renderer::load_animations() {
     load_slot(PlayerStateId::Heavy,   "assets/characters/knight/anims/attack_v3.glb",    true,  kHeavyTargetDuration);
     load_slot(PlayerStateId::Block,   "assets/characters/knight/anims/block_idle.glb",   true,  0.0f);
     load_slot(PlayerStateId::Riposte, "assets/characters/knight/anims/attack.glb",       true,  kRiposteTargetDuration);
+    load_slot(PlayerStateId::Cast,    "assets/characters/knight/anims/casting.glb",      true,  kCastTargetDuration);
 
     animator_.set_skeleton(mesh_.skeleton());
     // Snap-load Idle as the starting pose (no blend on first frame).
@@ -370,6 +373,16 @@ void Renderer::draw_debug_overlay(const Player& player_obj, float dt) {
     ImGui::ProgressBar(stam.fraction(), ImVec2(180, 0), "");
     ImGui::PopStyleColor();
 
+    // Day 15: faith bar (blue per GDD §15.2). Drains 20 on Cast entry;
+    // refunds 10 on damage-cancel; regens 5/s ALWAYS — no exclusion list
+    // unlike stamina. Sits directly under stamina without a separator;
+    // they're a tight resource cluster.
+    const auto& faith = player_obj.faith();
+    ImGui::Text("faith    %5.1f / %.0f", faith.current(), Faith::MAX_VALUE);
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, IM_COL32(110, 160, 220, 255));
+    ImGui::ProgressBar(faith.fraction(), ImVec2(180, 0), "");
+    ImGui::PopStyleColor();
+
     // Day 14: parry window indicator. Renders only while > 0 — short
     // burst (max 150ms) so the panel stays clean otherwise. Useful for
     // tuning the press-to-hit timing window.
@@ -397,7 +410,8 @@ void Renderer::draw_debug_overlay(const Player& player_obj, float dt) {
     ImGui::End();
 }
 
-void Renderer::draw_frame(const Camera& camera, const Player& player) {
+void Renderer::draw_frame(const Camera& camera, const Player& player,
+                          const std::vector<Projectile>& projectiles) {
     auto& frame = frames_[current_frame_];
 
     vkWaitForFences(vk_.device(), 1, &frame.in_flight, VK_TRUE, UINT64_MAX);
@@ -438,7 +452,7 @@ void Renderer::draw_frame(const Camera& camera, const Player& player) {
 
     vkResetFences(vk_.device(), 1, &frame.in_flight);
     vkResetCommandBuffer(frame.command_buffer, 0);
-    record_command_buffer(frame.command_buffer, image_index, camera, player.world_transform());
+    record_command_buffer(frame.command_buffer, image_index, camera, player.world_transform(), projectiles);
 
     const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 
@@ -477,7 +491,8 @@ void Renderer::draw_frame(const Camera& camera, const Player& player) {
 
 void Renderer::record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
                                      const Camera& camera,
-                                     const glm::mat4& world_transform) {
+                                     const glm::mat4& world_transform,
+                                     const std::vector<Projectile>& projectiles) {
     VkCommandBufferBeginInfo begin{};
     begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     if (vkBeginCommandBuffer(cmd, &begin) != VK_SUCCESS) {
@@ -552,6 +567,24 @@ void Renderer::record_command_buffer(VkCommandBuffer cmd, uint32_t image_index,
         VkDeviceSize doffsets[] = { 0 };
         vkCmdBindVertexBuffers(cmd, 0, 1, dvbufs, doffsets);
         vkCmdBindIndexBuffer(cmd, dummy_mesh_.index_buffer_handle(), 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, dummy_mesh_.index_count(), 1, 0, 0, 0);
+    }
+
+    // Day 15: live projectiles. Reuse dummy_mesh_'s vertex/index buffers —
+    // still bound from the dummy draw above (Vulkan persists bindings
+    // within a command buffer until rebound) — plus a per-projectile MVP
+    // push. Visual scale = DRAW_HALF_EXTENT * 2 (0.30m cube); slot-127
+    // identity trick keeps the non-skinned cube untransformed by the bone
+    // palette. Hit detection lives in main.cpp; this loop is render-only.
+    for (const auto& p : projectiles) {
+        if (!p.alive) continue;
+        const float visual_size = Projectile::DRAW_HALF_EXTENT * 2.0f;
+        glm::mat4 proj_model = glm::translate(glm::mat4(1.0f), p.position);
+        proj_model           = glm::scale(proj_model, glm::vec3(visual_size));
+        glm::mat4 proj_mvp   = camera.projection(aspect) * camera.view() * proj_model;
+        vkCmdPushConstants(cmd, pipeline_.layout(),
+                           VK_SHADER_STAGE_VERTEX_BIT,
+                           0, sizeof(proj_mvp), &proj_mvp);
         vkCmdDrawIndexed(cmd, dummy_mesh_.index_count(), 1, 0, 0, 0);
     }
 

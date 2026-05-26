@@ -9,6 +9,7 @@ void PlayerState::update(float dt, const PlayerInput& in) {
     switch (state_) {
         case PlayerStateId::Idle:
             if (in.riposte)      { transition_to(PlayerStateId::Riposte); break; }
+            if (in.cast)         { transition_to(PlayerStateId::Cast);    break; }
             if (in.heavy_attack) { transition_to(PlayerStateId::Heavy);   break; }
             if (in.attack)       { transition_to(PlayerStateId::Attack1); break; }
             if (in.dodge)        { transition_to(PlayerStateId::Roll);    break; }
@@ -19,6 +20,7 @@ void PlayerState::update(float dt, const PlayerInput& in) {
 
         case PlayerStateId::Walk:
             if (in.riposte)       { transition_to(PlayerStateId::Riposte); break; }
+            if (in.cast)          { transition_to(PlayerStateId::Cast);    break; }
             if (in.heavy_attack)  { transition_to(PlayerStateId::Heavy);   break; }
             if (in.attack)        { transition_to(PlayerStateId::Attack1); break; }
             if (in.dodge)         { transition_to(PlayerStateId::Roll);    break; }
@@ -29,6 +31,7 @@ void PlayerState::update(float dt, const PlayerInput& in) {
 
         case PlayerStateId::Jog:
             if (in.riposte)       { transition_to(PlayerStateId::Riposte); break; }
+            if (in.cast)          { transition_to(PlayerStateId::Cast);    break; }
             if (in.heavy_attack)  { transition_to(PlayerStateId::Heavy);   break; }
             if (in.attack)        { transition_to(PlayerStateId::Attack1); break; }
             if (in.dodge)         { transition_to(PlayerStateId::Roll);    break; }
@@ -42,6 +45,7 @@ void PlayerState::update(float dt, const PlayerInput& in) {
         case PlayerStateId::Attack3:
         case PlayerStateId::Heavy:
         case PlayerStateId::Riposte:
+        case PlayerStateId::Cast:
             update_attack(in);
             break;
 
@@ -66,13 +70,27 @@ void PlayerState::update(float dt, const PlayerInput& in) {
     }
 }
 
+void PlayerState::cancel_cast() {
+    // Day 15: external interrupt from Player when incoming damage lands
+    // during cast. Caller (Player::cancel_cast_with_refund) handles the
+    // 50% Faith refund; we just drop out of the state.
+    if (state_ == PlayerStateId::Cast) {
+        transition_to(PlayerStateId::Idle);
+    }
+}
+
 void PlayerState::update_attack(const PlayerInput& in) {
     const bool is_heavy   = (state_ == PlayerStateId::Heavy);
     const bool is_riposte = (state_ == PlayerStateId::Riposte);
-    const bool is_light   = !is_heavy && !is_riposte;
+    const bool is_cast    = (state_ == PlayerStateId::Cast);
+    const bool is_light   = !is_heavy && !is_riposte && !is_cast;
 
     float startup, active, post_active;
-    if (is_riposte) {
+    if (is_cast) {
+        startup     = CAST_STARTUP;
+        active      = CAST_ACTIVE;
+        post_active = CAST_RECOVERY;
+    } else if (is_riposte) {
         startup     = RIPOSTE_STARTUP;
         active      = RIPOSTE_ACTIVE;
         post_active = RIPOSTE_RECOVERY;
@@ -103,8 +121,11 @@ void PlayerState::update_attack(const PlayerInput& in) {
     if (t < startup + active + post_active) {
         phase_ = AttackPhase::Recovery;
 
-        // Roll-cancel: light and heavy only. Riposte is terminal (GDD §6).
-        if (in.dodge && !is_riposte) { transition_to(PlayerStateId::Roll); return; }
+        // Roll-cancel: light and heavy only. Riposte and Cast are terminal
+        // (GDD §6). Cast is also INTERRUPTIBLE BY DAMAGE — not by input —
+        // so the player can't bail out voluntarily; only incoming hits via
+        // cancel_cast() can break it early.
+        if (in.dodge && !is_riposte && !is_cast) { transition_to(PlayerStateId::Roll); return; }
 
         // Combo chain on light only.
         if (is_light) {
@@ -134,7 +155,8 @@ void PlayerState::transition_to(PlayerStateId next) {
               next == PlayerStateId::Attack2 ||
               next == PlayerStateId::Attack3 ||
               next == PlayerStateId::Heavy   ||
-              next == PlayerStateId::Riposte)
+              next == PlayerStateId::Riposte ||
+              next == PlayerStateId::Cast)
               ? AttackPhase::Startup
               : AttackPhase::None;
 }
@@ -166,6 +188,7 @@ const char* to_string(PlayerStateId id) {
         case PlayerStateId::Heavy:   return "Heavy";
         case PlayerStateId::Block:   return "Block";
         case PlayerStateId::Riposte: return "Riposte";
+        case PlayerStateId::Cast:    return "Cast";
         case PlayerStateId::Count:   return "Count";
     }
     return "?";

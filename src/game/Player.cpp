@@ -26,42 +26,42 @@ float lerp_yaw_shortest(float current, float target, float t) {
 }  // namespace
 
 void Player::tick_parry_window(float dt, const InputFrame& input) {
-    // Decay first so a fresh edge press this frame gets the full 0.15s,
-    // not 0.15s - dt.
     if (parry_window_remaining_ > 0.0f) {
         parry_window_remaining_ -= dt;
         if (parry_window_remaining_ < 0.0f) parry_window_remaining_ = 0.0f;
     }
-    // RMB edge press opens (or refreshes) the window. Held RMB does NOT
-    // refresh — that's the point of edge vs held: defensive tap is parry,
-    // held wall is block. A single RMB press fires BOTH this and Block
-    // entry on the same frame (rmb_pressed + rmb_held both true), which
-    // is exactly the Souls feel.
     if (input.rmb_pressed) {
         parry_window_remaining_ = PARRY_WINDOW;
     }
 }
 
-bool Player::try_parry() {
-    if (parry_window_remaining_ <= 0.0f) return false;
+float Player::try_parry() {
+    if (parry_window_remaining_ <= 0.0f) return 0.0f;
+    const float caught_at = parry_window_remaining_;
     parry_window_remaining_ = 0.0f;   // consume so next try_parry fails
     riposte_pending_        = true;   // update() will feed to pin.riposte
-    return true;
+    return caught_at;
 }
 
 void Player::absorb_block_hit(float damage) {
     // GDD §6: blocking drains stamina = 50% of incoming damage.
-    // Phase 4 will handle guard-broken when drain exceeds available.
     stamina_.drain(damage * 0.5f);
 }
 
+void Player::cancel_cast_with_refund() {
+    // Day 15: incoming-damage cancel of Cast. Refund 50% of BOLT_COST per
+    // GDD §6, then bounce the SM out of Cast via PlayerState::cancel_cast().
+    // No-op when not in Cast — safe to call from any damage path.
+    if (state_.id() != PlayerStateId::Cast) return;
+    faith_.refund(Faith::BOLT_COST * 0.5f);
+    state_.cancel_cast();
+}
+
 void Player::update(float dt, const InputFrame& input, const Camera& camera) {
-    // 1) Feed the SM. "move_forward" reads as "any locomotion input held" —
-    //    SM only branches on the bool, not direction.
-    //
-    //    Day 13: stamina gates each input before the SM sees it.
-    //    Day 14: pin.riposte fed from riposte_pending_ (set earlier this
-    //    frame by try_parry). No stamina gate — riposte is the parry reward.
+    // 1) Feed the SM. Day 13: stamina gates inputs before SM sees them.
+    //    Day 14: pin.riposte from riposte_pending_ (set earlier this frame
+    //    by try_parry). No stamina gate — riposte is the parry reward.
+    //    Day 15: pin.cast from q_pressed edge, gated by faith.
     const bool wants_heavy = input.lmb_pressed &&  input.shift_held;
     const bool wants_light = input.lmb_pressed && !input.shift_held;
 
@@ -73,14 +73,13 @@ void Player::update(float dt, const InputFrame& input, const Camera& camera) {
     pin.dodge        = input.space_pressed && stamina_.available(Stamina::ROLL_COST);
     pin.block        = input.rmb_held;
     pin.riposte      = riposte_pending_;
+    pin.cast         = input.q_pressed     && faith_.available(Faith::BOLT_COST);
     riposte_pending_ = false;   // single-shot — clear regardless of whether
-                                // the SM actually transitions (e.g., parry
-                                // during Roll silently drops; i-frames
-                                // already absorb the hit)
+                                // the SM actually transitions
 
     state_.update(dt, pin);
 
-    // 1b) Charge stamina on entry into action states.
+    // 1b) Charge resources on entry into action states.
     if (state_.state_changed()) {
         switch (state_.id()) {
             case PlayerStateId::Attack1:
@@ -88,12 +87,14 @@ void Player::update(float dt, const InputFrame& input, const Camera& camera) {
             case PlayerStateId::Attack3: stamina_.drain(Stamina::LIGHT_COST); break;
             case PlayerStateId::Heavy:   stamina_.drain(Stamina::HEAVY_COST); break;
             case PlayerStateId::Roll:    stamina_.drain(Stamina::ROLL_COST);  break;
+            case PlayerStateId::Cast:    faith_.drain(Faith::BOLT_COST);      break;  // Day 15
             default: break;   // Riposte: no entry cost (reward state)
         }
     }
 
     // 1c) Tick stamina. GDD §7: regen 25/s except attacking/blocking/sprinting.
     //     Day 14: Riposte is an attack state, joins the spending list.
+    //     Day 15: Cast does NOT pause stamina — Faith is its own resource.
     const PlayerStateId id = state_.id();
     const bool sprint_active = (id == PlayerStateId::Jog) && pin.sprint;
     const bool spending = sprint_active
@@ -105,6 +106,13 @@ void Player::update(float dt, const InputFrame& input, const Camera& camera) {
                        || id == PlayerStateId::Block;
     if (sprint_active) stamina_.drain_rate(Stamina::SPRINT_DRAIN, dt);
     if (!spending)     stamina_.regen_rate(Stamina::REGEN_RATE, dt);
+
+    // 1d) Tick faith. GDD §6: regen 5/s ALWAYS — no spending exclusion.
+    //     Cast's drain on entry (above) IS the spending event; regen
+    //     continues during the cast itself, matching the GDD wording
+    //     literally and giving the player a small always-on pull toward
+    //     the next bolt.
+    faith_.regen_rate(Faith::REGEN_RATE, dt);
 
     // 2) Build world-space wish direction from camera basis.
     const glm::vec3 fwd   = camera.forward_xz();
@@ -127,7 +135,7 @@ void Player::update(float dt, const InputFrame& input, const Camera& camera) {
         }
     }
 
-    // 4) Velocity per state. Heavy/Block/Riposte all hold position via default.
+    // 4) Velocity per state. Heavy/Block/Riposte/Cast all hold position via default.
     switch (state_.id()) {
         case PlayerStateId::Walk: velocity_ = wish_dir * WALK_SPEED;   break;
         case PlayerStateId::Jog:  velocity_ = wish_dir * SPRINT_SPEED; break;
@@ -136,7 +144,7 @@ void Player::update(float dt, const InputFrame& input, const Camera& camera) {
     }
     position_ += velocity_ * dt;
 
-    // 5) Face the movement direction (locomotion + roll). Attacks hold facing.
+    // 5) Face the movement direction (locomotion + roll). Attacks/Cast hold facing.
     glm::vec3 face_dir(0.0f);
     if (state_.id() == PlayerStateId::Roll) {
         face_dir = roll_dir_;
